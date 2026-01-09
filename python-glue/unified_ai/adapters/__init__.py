@@ -5,6 +5,8 @@ from .claude import ClaudeAdapter
 from .gpt import GPTAdapter
 from .perplexity import PerplexityAdapter
 from .gemini import GeminiAdapter
+from .cursor import CursorAdapter
+from .local import LocalLLMAdapter
 
 __all__ = [
     "ToolAdapter",
@@ -15,4 +17,6 @@ __all__ = [
     "GPTAdapter",
     "PerplexityAdapter",
     "GeminiAdapter",
+    "CursorAdapter",
+    "LocalLLMAdapter",
 ]

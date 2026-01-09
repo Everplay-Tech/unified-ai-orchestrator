@@ -1,0 +1,72 @@
+# Deployment Guide
+
+## Production Deployment
+
+### Environment Variables
+
+Required:
+- `JWT_SECRET_KEY` - Secret for JWT tokens
+- `ENCRYPTION_KEY` - Encryption key for secrets
+
+Optional:
+- `DATABASE_PATH` - Path to SQLite database
+- `LOG_LEVEL` - Logging level (info, debug, etc.)
+- `API_HOST` - API host (default: 0.0.0.0)
+- `API_PORT` - API port (default: 8000)
+
+### Docker Deployment
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+# Copy and build
+COPY . .
+RUN pip install -e .
+RUN cd rust-core && cargo build --release
+
+# Run
+CMD ["python", "-m", "unified_ai.api.server"]
+```
+
+### Systemd Service
+
+Create `/etc/systemd/system/uai.service`:
+
+```ini
+[Unit]
+Description=Unified AI Orchestrator
+After=network.target
+
+[Service]
+Type=simple
+User=uai
+WorkingDirectory=/opt/uai
+Environment="JWT_SECRET_KEY=your-secret-key"
+ExecStart=/usr/bin/python3 -m unified_ai.api.server
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Security Checklist
+
+- [ ] Set strong `JWT_SECRET_KEY`
+- [ ] Set `ENCRYPTION_KEY`
+- [ ] Configure CORS origins
+- [ ] Enable HTTPS
+- [ ] Set up firewall rules
+- [ ] Configure rate limiting
+- [ ] Set up monitoring
+- [ ] Enable audit logging
+
+### Monitoring
+
+- Prometheus metrics: `GET /metrics`
+- Health check: `GET /health`
+- Logs: Structured JSON logs

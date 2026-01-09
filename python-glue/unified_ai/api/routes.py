@@ -237,15 +237,5 @@ async def list_tools():
 @router.websocket("/ws/chat")
 async def websocket_chat(websocket: WebSocket):
     """WebSocket chat endpoint for streaming"""
-    await websocket.accept()
-    
-    try:
-        while True:
-            data = await websocket.receive_json()
-            message = data.get("message", "")
-            
-            # Handle streaming chat
-            # Implementation would stream responses
-            await websocket.send_json({"content": "Streaming not fully implemented yet"})
-    except Exception as e:
-        await websocket.close(code=1011, reason=str(e))
+    from ..api.websocket import handle_websocket_chat
+    await handle_websocket_chat(websocket)

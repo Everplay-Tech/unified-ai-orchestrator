@@ -39,3 +39,4 @@ sqlx-migrate = "0.1"
 # Security
 ring = "0.17"
 chrono = { version = "0.4", features = ["serde"] }
+md5 = "0.7"

@@ -5,6 +5,9 @@ pub mod composer;
 pub mod error;
 pub mod resilience;
 pub mod observability;
+pub mod security;
+pub mod migrations;
+pub mod indexer;
 
 pub use router::Router;
 pub use context::ContextManager;

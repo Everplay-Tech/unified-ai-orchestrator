@@ -44,6 +44,7 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.40b0",
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
+    "tiktoken>=0.5.0",
 ]
 
 [project.optional-dependencies]

@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 import uvicorn
 
 from .routes import router
+from .middleware import SecurityHeadersMiddleware, setup_cors
 from ..config import load_config
 from ..observability import setup_logging, MetricsCollector
 
@@ -35,14 +36,11 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     
-    # CORS middleware
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],  # Configure appropriately for production
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # Setup CORS
+    setup_cors(app)
+    
+    # Add security headers middleware
+    app.add_middleware(SecurityHeadersMiddleware)
     
     # Include routers
     app.include_router(router, prefix="/api/v1")
