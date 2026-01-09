@@ -54,9 +54,28 @@ class TokenBucket:
 class RateLimiter:
     """Rate limiter using token bucket"""
     
-    def __init__(self, name: str, capacity: int, refill_rate: float):
-        self.name = name
+    def __init__(self, capacity: int, refill_rate: float = None):
+        """
+        Initialize rate limiter
+        
+        Args:
+            capacity: Maximum number of tokens (requests)
+            refill_rate: Tokens per second (defaults to capacity/60 for per-minute rate)
+        """
+        if refill_rate is None:
+            # Default: refill at rate that allows capacity requests per minute
+            refill_rate = capacity / 60.0
         self.bucket = TokenBucket(capacity, refill_rate)
+    
+    def allow(self) -> bool:
+        """Check if request is allowed (alias for try_acquire)"""
+        return self.try_acquire(1)
+    
+    def remaining(self) -> int:
+        """Get remaining tokens"""
+        self.bucket._refill()
+        with self.bucket._lock:
+            return max(0, self.bucket.tokens as int)
     
     async def acquire(self, tokens: int = 1) -> None:
         """Acquire tokens, waiting if necessary"""

@@ -1,5 +1,6 @@
 """Cursor IDE adapter"""
 
+import json
 import httpx
 from typing import AsyncIterator, List, Optional
 from .base import ToolAdapter, ToolCapabilities, ToolCapability, Message, Response, Context
@@ -10,7 +11,12 @@ class CursorAdapter(ToolAdapter):
     
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or self._get_api_key()
-        self.base_url = "https://api.cursor.sh"  # Placeholder URL
+        # Note: Cursor IDE does not currently have a public API
+        # This adapter is prepared for future API availability
+        # For now, it can be used with Cursor's local integration features
+        # If you have access to Cursor's internal API, update this URL
+        import os
+        self.base_url = os.getenv("CURSOR_API_URL", "http://localhost:3000")  # Default to local Cursor instance
         self._client: Optional[httpx.AsyncClient] = None
     
     def _get_api_key(self) -> Optional[str]:
@@ -18,6 +24,7 @@ class CursorAdapter(ToolAdapter):
         import os
         from ..utils.auth import get_secret
         
+        # Cursor may use local authentication or API keys
         return os.getenv("CURSOR_API_KEY") or get_secret("cursor_api_key")
     
     @property
@@ -52,14 +59,19 @@ class CursorAdapter(ToolAdapter):
     
     async def is_available(self) -> bool:
         """Check if Cursor API is available"""
-        if not self.api_key:
-            return False
+        # Cursor doesn't have a public API yet, so availability depends on local setup
+        # Check if Cursor is running locally or if API key is configured
+        if self.api_key:
+            return True
         
+        # Try to connect to local Cursor instance
         try:
             client = await self._get_client()
-            response = await client.get("/health")
+            # Try a simple endpoint (may not exist)
+            response = await client.get("/health", timeout=2.0)
             return response.status_code == 200
         except Exception:
+            # If no API key and can't connect, assume unavailable
             return False
     
     async def chat(

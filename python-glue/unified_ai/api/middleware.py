@@ -55,20 +55,41 @@ def setup_cors(app, allowed_origins: List[str] = None):
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Rate limiting middleware"""
+    """Rate limiting middleware with token bucket"""
     
     def __init__(self, app: ASGIApp, requests_per_minute: int = 60):
         super().__init__(app)
         self.requests_per_minute = requests_per_minute
-        self.request_counts = {}  # In production, use Redis or similar
+        from collections import defaultdict
+        from ..resilience import RateLimiter
+        self.limiters = defaultdict(lambda: RateLimiter(requests_per_minute))
     
     async def dispatch(self, request: Request, call_next):
+        from fastapi.responses import Response
+        
         # Get client identifier (IP address or user ID)
         client_id = request.client.host if request.client else "unknown"
         
-        # TODO: Implement proper rate limiting with token bucket
-        # For now, basic check
-        # In production, use a proper rate limiting library
+        # Get or create rate limiter for this client
+        limiter = self.limiters[client_id]
         
+        # Check if request is allowed
+        if not limiter.allow():
+            return Response(
+                status_code=429,
+                content="Rate limit exceeded",
+                headers={
+                    "X-RateLimit-Limit": str(self.requests_per_minute),
+                    "X-RateLimit-Remaining": "0",
+                    "Retry-After": "60",
+                }
+            )
+        
+        # Process request
         response = await call_next(request)
+        
+        # Add rate limit headers
+        response.headers["X-RateLimit-Limit"] = str(self.requests_per_minute)
+        response.headers["X-RateLimit-Remaining"] = str(limiter.remaining())
+        
         return response

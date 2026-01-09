@@ -65,7 +65,12 @@ async def handle_websocket_chat(
             "general_chat": config.routing.general_chat,
         }
         router = Router(routing_rules, config.routing.default_tool)
-        context_manager = ContextManager()
+        
+        # Initialize ContextManager with db_path from config
+        from pathlib import Path
+        db_path = Path(config.storage.db_path).expanduser()
+        context_manager = ContextManager(db_path)
+        
         adapters = get_adapters()
         
         while True:

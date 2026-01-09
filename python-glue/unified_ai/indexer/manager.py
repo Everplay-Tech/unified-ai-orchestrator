@@ -1,11 +1,13 @@
 """Indexer manager for Python interface"""
 
-import asyncio
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-# Note: This would use PyO3 bindings in a full implementation
-# For now, we'll create a Python interface that can be connected later
+try:
+    from unified_ai_orchestrator.pyo3_bridge import PyCodebaseIndexer, PySemanticSearch
+    HAS_PYO3 = True
+except ImportError:
+    HAS_PYO3 = False
 
 
 class IndexerManager:
@@ -14,29 +16,54 @@ class IndexerManager:
     def __init__(self, project_id: str, db_path: Path):
         self.project_id = project_id
         self.db_path = db_path
-        # TODO: Initialize Rust indexer via PyO3
+        
+        if HAS_PYO3:
+            self.indexer = PyCodebaseIndexer(project_id, str(db_path))
+            self.search_engine = PySemanticSearch(str(db_path))
+        else:
+            self.indexer = None
+            self.search_engine = None
     
-    async def index_directory(self, root_path: Path) -> int:
+    def index_directory(self, root_path: Path) -> int:
         """Index a directory recursively"""
-        # TODO: Call Rust indexer
-        return 0
+        if HAS_PYO3 and self.indexer:
+            return self.indexer.index_directory(str(root_path))
+        else:
+            print("PyO3 bindings not available - indexing not supported")
+            return 0
     
-    async def index_file(self, file_path: Path) -> None:
+    def index_file(self, file_path: Path) -> None:
         """Index a single file"""
-        # TODO: Call Rust indexer
-        pass
+        if HAS_PYO3 and self.indexer:
+            self.indexer.index_file(str(file_path))
+        else:
+            print("PyO3 bindings not available - indexing not supported")
     
-    async def search(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def search(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Search codebase"""
-        # TODO: Call Rust search
-        return []
+        if HAS_PYO3 and self.search_engine:
+            results = self.search_engine.search(self.project_id, query, limit)
+            return [
+                {
+                    "file_path": file_path,
+                    "block_type": block_type,
+                    "name": name,
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "score": score,
+                }
+                for file_path, block_type, name, start_line, end_line, score in results
+            ]
+        else:
+            print("PyO3 bindings not available - search not supported")
+            return []
     
-    async def watch_directory(self, path: Path) -> None:
+    def watch_directory(self, path: Path) -> None:
         """Start watching a directory for changes"""
-        # TODO: Start file watcher
-        pass
+        # File watcher implementation would require additional setup
+        # For now, this is a placeholder
+        print(f"File watching not yet implemented - would watch {path}")
     
-    async def stop_watching(self) -> None:
+    def stop_watching(self) -> None:
         """Stop watching for changes"""
-        # TODO: Stop file watcher
-        pass
+        print("File watching not yet implemented")

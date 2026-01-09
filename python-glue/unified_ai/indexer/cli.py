@@ -15,7 +15,7 @@ def index(
 ):
     """Index a directory or file"""
     manager = IndexerManager(project_id, Path(db_path))
-    indexed = asyncio.run(manager.index_directory(Path(path)))
+    indexed = manager.index_directory(Path(path))
     typer.echo(f"Indexed {indexed} files")
 
 
@@ -28,7 +28,7 @@ def search(
 ):
     """Search indexed codebase"""
     manager = IndexerManager(project_id, Path(db_path))
-    results = asyncio.run(manager.search(query, limit))
+    results = manager.search(query, limit)
     
     for result in results:
         typer.echo(f"{result.get('file_path')}:{result.get('start_line')} - {result.get('name', 'unknown')}")
@@ -43,7 +43,7 @@ def watch(
     """Watch directory for changes and auto-index"""
     manager = IndexerManager(project_id, Path(db_path))
     typer.echo(f"Watching {path} for changes...")
-    asyncio.run(manager.watch_directory(Path(path)))
+    manager.watch_directory(Path(path))
 
 
 if __name__ == "__main__":

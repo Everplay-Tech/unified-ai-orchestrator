@@ -57,3 +57,29 @@ def delete_api_key(service: str, username: str = "default") -> None:
         keyring.delete_password(f"uai-{service}", username)
     except Exception:
         pass  # Ignore if key doesn't exist
+
+
+def get_secret(secret_name: str) -> Optional[str]:
+    """
+    Get secret from keyring or environment variable
+    
+    Args:
+        secret_name: Name of the secret (e.g., "cursor_api_key")
+    
+    Returns:
+        Secret value or None if not found
+    """
+    # Try environment variable first
+    env_var = secret_name.upper().replace("-", "_")
+    value = os.getenv(env_var)
+    if value:
+        return value
+    
+    # Try keyring with uai-secrets namespace
+    try:
+        return keyring.get_password("uai-secrets", secret_name)
+    except Exception:
+        pass
+    
+    # Fallback: try as API key
+    return get_api_key(secret_name.replace("_api_key", ""))
