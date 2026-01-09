@@ -28,7 +28,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 opentelemetry = "0.21"
 opentelemetry-otlp = "0.14"
-opentelemetry-sdk = "0.21"
+opentelemetry_sdk = "0.21"
 prometheus = "0.13"
 # Indexing (will be used in Phase 2)
 tree-sitter = "0.20"

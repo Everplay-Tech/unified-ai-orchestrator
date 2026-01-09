@@ -24,7 +24,7 @@ pub fn setup_tracing(service_name: &str, endpoint: Option<&str>) {
         }
         
         let tracer_provider = tracer_provider_builder
-            .install_batch(opentelemetry_sdk::runtime::Tokio)
+            .install_batch(opentelemetry_sdk::runtime::TokioCurrentThread)
             .expect("Failed to create tracer provider");
         
         global::set_tracer_provider(tracer_provider);
