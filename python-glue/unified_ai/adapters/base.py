@@ -45,12 +45,8 @@ class Context:
     """Context for a conversation"""
     conversation_id: Optional[str] = None
     project_id: Optional[str] = None
-    messages: List[Message] = None
+    messages: List[Message] = field(default_factory=list)
     codebase_context: Optional[dict] = None
-
-    def __post_init__(self):
-        if self.messages is None:
-            self.messages = []
 
 
 class ToolAdapter(ABC):
