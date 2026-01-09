@@ -22,20 +22,19 @@ class TokenBucket:
         self.last_refill = time.time()
     
     def _refill(self) -> None:
-        """Refill tokens based on elapsed time"""
-        with self._lock:
-            now = time.time()
-            elapsed = now - self.last_refill
-            tokens_to_add = elapsed * self.refill_rate
-            
-            if tokens_to_add > 0:
-                self.tokens = min(self.tokens + tokens_to_add, self.capacity)
-                self.last_refill = now
+        """Refill tokens based on elapsed time (must be called with lock held)"""
+        now = time.time()
+        elapsed = now - self.last_refill
+        tokens_to_add = elapsed * self.refill_rate
+        
+        if tokens_to_add > 0:
+            self.tokens = min(self.tokens + tokens_to_add, self.capacity)
+            self.last_refill = now
     
     def try_acquire(self, tokens: int = 1) -> bool:
         """Try to acquire tokens"""
-        self._refill()
         with self._lock:
+            self._refill()
             if self.tokens >= tokens:
                 self.tokens -= tokens
                 return True
@@ -43,8 +42,8 @@ class TokenBucket:
     
     def wait_time(self) -> float:
         """Calculate wait time until tokens available"""
-        self._refill()
         with self._lock:
+            self._refill()
             if self.tokens >= 1:
                 return 0.0
             tokens_needed = 1.0 - self.tokens
@@ -73,9 +72,9 @@ class RateLimiter:
     
     def remaining(self) -> int:
         """Get remaining tokens"""
-        self.bucket._refill()
         with self.bucket._lock:
-            return max(0, self.bucket.tokens as int)
+            self.bucket._refill()
+            return max(0, int(self.bucket.tokens))
     
     async def acquire(self, tokens: int = 1) -> None:
         """Acquire tokens, waiting if necessary"""

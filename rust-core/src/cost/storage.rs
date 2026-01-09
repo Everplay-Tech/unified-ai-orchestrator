@@ -116,21 +116,30 @@ impl CostStorage {
         user_id: Option<&str>,
         project_id: Option<&str>,
     ) -> Result<f64> {
+        // Build query string first, accounting for optional filters
         let mut query = "SELECT SUM(cost_usd) as total FROM cost_records WHERE timestamp >= ?1 AND timestamp <= ?2".to_string();
+        let mut param_count = 2;
         
-        let mut query_builder = sqlx::query_as::<_, (Option<f64>,)>(
-            &query
-        )
-        .bind(start.timestamp())
-        .bind(end.timestamp());
+        if user_id.is_some() {
+            param_count += 1;
+            query.push_str(&format!(" AND user_id = ?{}", param_count));
+        }
+        
+        if project_id.is_some() {
+            param_count += 1;
+            query.push_str(&format!(" AND project_id = ?{}", param_count));
+        }
+        
+        // Now create query builder with the complete query string
+        let mut query_builder = sqlx::query_as::<_, (Option<f64>,)>(&query)
+            .bind(start.timestamp())
+            .bind(end.timestamp());
 
         if let Some(uid) = user_id {
-            query.push_str(" AND user_id = ?3");
             query_builder = query_builder.bind(uid);
         }
 
         if let Some(pid) = project_id {
-            query.push_str(" AND project_id = ?4");
             query_builder = query_builder.bind(pid);
         }
 

@@ -27,11 +27,18 @@ security = HTTPBearer()
 
 def get_secret_key() -> str:
     """Get JWT secret key from config or environment"""
-    config = load_config()
-    secret = os.getenv("JWT_SECRET_KEY") or config.get("security", {}).get("jwt_secret", "change-me-in-production")
-    if secret == "change-me-in-production":
+    # Check environment variable first
+    secret = os.getenv("JWT_SECRET_KEY")
+    
+    # Validate that secret is not empty or just whitespace
+    if secret and secret.strip():
+        return secret.strip()
+    
+    # If env var is not set or is empty, use default and validate
+    secret = os.getenv("JWT_SECRET_KEY", "change-me-in-production")
+    if not secret or not secret.strip() or secret == "change-me-in-production":
         raise ValueError("JWT_SECRET_KEY must be set in production")
-    return secret
+    return secret.strip()
 
 
 def hash_password(password: str) -> str:
