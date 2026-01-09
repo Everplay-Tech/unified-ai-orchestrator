@@ -22,13 +22,14 @@ class TestClaudeAdapter:
         assert adapter.capabilities.supports_streaming is True
         assert adapter.capabilities.supports_code_context is True
     
-    def test_claude_adapter_is_available(self):
+    @pytest.mark.asyncio
+    async def test_claude_adapter_is_available(self):
         """Test Claude adapter availability check"""
         adapter = ClaudeAdapter(api_key="test-key")
-        assert adapter.is_available() is True
+        assert await adapter.is_available() is True
         
         adapter_no_key = ClaudeAdapter(api_key=None)
-        assert adapter_no_key.is_available() is False
+        assert await adapter_no_key.is_available() is False
     
     @pytest.mark.asyncio
     async def test_claude_adapter_chat(self):

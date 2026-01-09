@@ -100,19 +100,3 @@ class MetricsCollector:
         """Export metrics in Prometheus format"""
         from prometheus_client import generate_latest
         return generate_latest(REGISTRY).decode("utf-8")
-
-
-# Convenience functions
-def Counter(name: str, **kwargs):
-    """Create a counter metric"""
-    return Counter(name, **kwargs)
-
-
-def Histogram(name: str, **kwargs):
-    """Create a histogram metric"""
-    return Histogram(name, **kwargs)
-
-
-def Gauge(name: str, **kwargs):
-    """Create a gauge metric"""
-    return Gauge(name, **kwargs)
