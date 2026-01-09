@@ -1,6 +1,6 @@
 # Unified AI Orchestration System
 
-[![CI](https://github.com/YOUR_USERNAME/unified-ai-orchestrator/workflows/CI/badge.svg)](https://github.com/YOUR_USERNAME/unified-ai-orchestrator/actions)
+[![CI](https://github.com/Everplay-Tech/unified-ai-orchestrator/workflows/CI/badge.svg)](https://github.com/Everplay-Tech/unified-ai-orchestrator/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
