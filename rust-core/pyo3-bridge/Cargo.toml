@@ -1,0 +1,18 @@
+[package]
+name = "pyo3-bridge"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "pyo3_bridge"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.20", features = ["auto-initialize", "abi3-py38"] }
+rust-core = { path = ".." }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+pyo3-asyncio = { version = "0.21", features = ["tokio-runtime"] }

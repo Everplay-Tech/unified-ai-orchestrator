@@ -1,0 +1,24 @@
+[storage]
+db_path = "~/.uai/db.sqlite"
+index_path = "~/.uai/indexes"
+
+[tools.claude]
+api_key_env = "ANTHROPIC_API_KEY"
+enabled = true
+model = "claude-3-5-sonnet-20241022"
+
+[tools.gpt]
+api_key_env = "OPENAI_API_KEY"
+enabled = true
+model = "gpt-4"
+
+[routing]
+default_tool = "claude"
+code_editing = ["claude"]
+research = ["claude"]
+general_chat = ["claude", "gpt"]
+
+[codebase]
+auto_index = true
+watch_paths = ["~/projects"]
+index_depth = 3

@@ -1,0 +1,9 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "unified-ai"
+version = "0.1.0"
+description = "Unified AI tool orchestration system - Python glue layer"
+requires-python = ">=3.10"
