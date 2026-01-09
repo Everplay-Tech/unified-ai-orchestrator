@@ -49,11 +49,21 @@ class CodebaseConfig:
 
 
 @dataclass
+class APIConfig:
+    """API configuration for mobile access"""
+    enable_mobile: bool = True
+    api_key: Optional[str] = None  # Stored in keyring, not in config file
+    allowed_origins: List[str] = field(default_factory=lambda: ["*"])
+    rate_limit_per_minute: int = 60
+
+
+@dataclass
 class Config:
     """Main configuration"""
     storage: StorageConfig = field(default_factory=StorageConfig)
     routing: RoutingConfig = field(default_factory=RoutingConfig)
     codebase: CodebaseConfig = field(default_factory=CodebaseConfig)
+    api: APIConfig = field(default_factory=APIConfig)
     tools: Dict[str, ToolConfig] = field(default_factory=dict)
 
     @classmethod
@@ -69,6 +79,9 @@ class Config:
         
         if "codebase" in data:
             config.codebase = CodebaseConfig(**data["codebase"])
+        
+        if "api" in data:
+            config.api = APIConfig(**data["api"])
         
         if "tools" in data:
             for tool_name, tool_data in data["tools"].items():
@@ -93,6 +106,11 @@ class Config:
                 "auto_index": self.codebase.auto_index,
                 "watch_paths": self.codebase.watch_paths,
                 "index_depth": self.codebase.index_depth,
+            },
+            "api": {
+                "enable_mobile": self.api.enable_mobile,
+                "allowed_origins": self.api.allowed_origins,
+                "rate_limit_per_minute": self.api.rate_limit_per_minute,
             },
             "tools": {},
         }
@@ -143,6 +161,16 @@ def load_config(config_path: Optional[Path] = None) -> Config:
             api_key = os.getenv(tool_config.api_key_env)
             if api_key:
                 tool_config.api_key = api_key
+    
+    # Load mobile API key from keyring if not in config
+    if not config.api.api_key:
+        try:
+            from ..utils.auth import get_secret
+            mobile_api_key = get_secret("mobile_api_key")
+            if mobile_api_key:
+                config.api.api_key = mobile_api_key
+        except Exception:
+            pass
     
     return config
 

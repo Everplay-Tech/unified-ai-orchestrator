@@ -22,3 +22,8 @@ general_chat = ["claude", "gpt"]
 auto_index = true
 watch_paths = ["~/projects"]
 index_depth = 3
+
+[api]
+enable_mobile = true
+allowed_origins = ["*"]
+rate_limit_per_minute = 60

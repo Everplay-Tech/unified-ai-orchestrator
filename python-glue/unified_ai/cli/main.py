@@ -9,9 +9,11 @@ import typer
 from rich.console import Console
 from rich.prompt import Prompt
 
+import secrets
 from ..adapters import ClaudeAdapter, GPTAdapter, ToolAdapter
 from ..config import load_config, save_config, Config, ToolConfig
-from ..utils.auth import get_api_key, set_api_key
+from ..utils.auth import get_api_key, set_api_key, get_secret
+from ..utils.auth import set_secret as set_secret_auth
 from ..router import Router
 from ..context_manager import ContextManager
 
@@ -239,6 +241,49 @@ def config():
     # Save config
     save_config(config)
     console.print("\n[green]Configuration saved![/green]")
+
+
+@app.command()
+def mobile_key(
+    generate: bool = typer.Option(False, "--generate", "-g", help="Generate a new API key"),
+    show: bool = typer.Option(False, "--show", "-s", help="Show current API key"),
+):
+    """Manage mobile API key for remote access"""
+    if generate:
+        # Generate a secure random API key
+        api_key = secrets.token_urlsafe(32)
+        
+        # Store in keyring
+        try:
+            set_secret_auth("mobile_api_key", api_key)
+            console.print("\n[green]✓ Mobile API key generated and saved![/green]")
+            console.print(f"\n[bold]Your API key:[/bold]")
+            console.print(f"[cyan]{api_key}[/cyan]\n")
+            console.print("[yellow]⚠️  Save this key securely. You'll need it to access the mobile interface.[/yellow]")
+            console.print("\nSet it as an environment variable:")
+            console.print(f"[dim]export MOBILE_API_KEY={api_key}[/dim]\n")
+        except Exception as e:
+            console.print(f"[red]Failed to save API key: {e}[/red]")
+            raise typer.Exit(1)
+    elif show:
+        # Show current API key
+        api_key = get_secret("mobile_api_key")
+        if api_key:
+            console.print("\n[bold]Current mobile API key:[/bold]")
+            console.print(f"[cyan]{api_key}[/cyan]\n")
+        else:
+            console.print("\n[yellow]No mobile API key found.[/yellow]")
+            console.print("Generate one with: [cyan]uai mobile-key --generate[/cyan]\n")
+    else:
+        # Show current key or prompt to generate
+        api_key = get_secret("mobile_api_key")
+        if api_key:
+            console.print("\n[bold]Current mobile API key:[/bold]")
+            console.print(f"[cyan]{api_key}[/cyan]\n")
+            console.print("Generate a new key with: [cyan]uai mobile-key --generate[/cyan]\n")
+        else:
+            console.print("\n[yellow]No mobile API key configured.[/yellow]")
+            console.print("Generate one with: [cyan]uai mobile-key --generate[/cyan]\n")
 
 
 if __name__ == "__main__":

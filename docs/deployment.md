@@ -70,3 +70,47 @@ WantedBy=multi-user.target
 - Prometheus metrics: `GET /metrics`
 - Health check: `GET /health`
 - Logs: Structured JSON logs
+
+## Mobile Access
+
+The system includes a mobile web interface for remote access. See [Mobile Access Guide](mobile-access.md) for detailed setup instructions.
+
+### Quick Setup
+
+1. Generate mobile API key:
+   ```bash
+   uai mobile-key --generate
+   ```
+
+2. Start server:
+   ```bash
+   python -m unified_ai.api.server
+   ```
+
+3. Configure network access (port forwarding for remote access)
+
+4. Access from mobile browser at `http://YOUR_IP:8000`
+
+### Mobile Access Security
+
+For production mobile access:
+
+- **Use HTTPS**: Set up reverse proxy with SSL certificates
+- **Restrict Origins**: Configure `allowed_origins` in config file
+- **API Key Authentication**: Required for all mobile requests
+- **Rate Limiting**: Configured per API key (default: 60 req/min)
+- **VPN Recommended**: Use VPN instead of direct port forwarding for better security
+
+### Configuration
+
+Mobile access settings in `~/.uai/config.toml`:
+
+```toml
+[api]
+enable_mobile = true
+api_key = "stored-in-keyring"  # Generated via uai mobile-key --generate
+allowed_origins = ["*"]  # Restrict in production
+rate_limit_per_minute = 60
+```
+
+See [mobile-access.md](mobile-access.md) for complete setup guide.

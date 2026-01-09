@@ -53,12 +53,22 @@ async def handle_websocket_chat(
 ):
     """Handle WebSocket chat connection"""
     import uuid
+    import os
     connection_id = str(uuid.uuid4())
     
     await ws_manager.connect(websocket, connection_id)
     
     try:
         config = load_config()
+        
+        # Get mobile API key for authentication
+        mobile_api_key = None
+        if hasattr(config, 'api') and hasattr(config.api, 'api_key'):
+            mobile_api_key = config.api.api_key
+        
+        # If no API key configured, allow access (development mode)
+        authenticated = mobile_api_key is None
+        
         routing_rules = {
             "code_editing": config.routing.code_editing,
             "research": config.routing.research,
@@ -78,6 +88,38 @@ async def handle_websocket_chat(
             data = await websocket.receive_json()
             
             message_type = data.get("type", "chat")
+            
+            # Handle authentication
+            if message_type == "auth":
+                provided_key = data.get("api_key")
+                if mobile_api_key:
+                    if provided_key == mobile_api_key:
+                        authenticated = True
+                        await ws_manager.send_message(connection_id, {
+                            "type": "auth_success",
+                        })
+                    else:
+                        await ws_manager.send_message(connection_id, {
+                            "type": "error",
+                            "message": "Invalid API key",
+                        })
+                        ws_manager.disconnect(connection_id)
+                        return
+                else:
+                    # No API key configured, allow access
+                    authenticated = True
+                    await ws_manager.send_message(connection_id, {
+                        "type": "auth_success",
+                    })
+                continue
+            
+            # Require authentication for other message types
+            if not authenticated and mobile_api_key:
+                await ws_manager.send_message(connection_id, {
+                    "type": "error",
+                    "message": "Authentication required. Send auth message first.",
+                })
+                continue
             
             if message_type == "chat":
                 message = data.get("message", "")

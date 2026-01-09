@@ -83,3 +83,17 @@ def get_secret(secret_name: str) -> Optional[str]:
     
     # Fallback: try as API key
     return get_api_key(secret_name.replace("_api_key", ""))
+
+
+def set_secret(secret_name: str, secret_value: str) -> None:
+    """
+    Store secret in keyring
+    
+    Args:
+        secret_name: Name of the secret (e.g., "mobile_api_key")
+        secret_value: Secret value to store
+    """
+    try:
+        keyring.set_password("uai-secrets", secret_name, secret_value)
+    except Exception as e:
+        raise RuntimeError(f"Failed to store secret: {e}")

@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="description" content="Unified AI Assistant - Mobile Chat">
+    <meta name="theme-color" content="#007aff">
+    <title>AI Assistant</title>
+    <link rel="manifest" href="/static/manifest.json">
+    <link rel="stylesheet" href="/static/styles.css">
+    <script>
+        // Register service worker
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/static/sw.js')
+                    .then((registration) => {
+                        console.log('Service Worker registered:', registration);
+                    })
+                    .catch((error) => {
+                        console.log('Service Worker registration failed:', error);
+                    });
+            });
+        }
+    </script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <h1>AI Assistant</h1>
+            <div class="header-actions">
+                <button id="settings-btn" class="icon-btn" aria-label="Settings">⚙️</button>
+                <button id="conversations-btn" class="icon-btn" aria-label="Conversations">💬</button>
+            </div>
+        </header>
+
+        <!-- Settings Panel -->
+        <div id="settings-panel" class="panel hidden">
+            <h2>Settings</h2>
+            <div class="form-group">
+                <label for="api-key-input">API Key</label>
+                <input type="password" id="api-key-input" placeholder="Enter API key">
+                <button id="save-api-key" class="btn-primary">Save</button>
+            </div>
+            <div class="form-group">
+                <label for="server-url-input">Server URL</label>
+                <input type="text" id="server-url-input" placeholder="http://your-home-ip:8000">
+                <button id="save-server-url" class="btn-primary">Save</button>
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="use-websocket"> Use WebSocket (streaming)
+                </label>
+            </div>
+            <button id="close-settings" class="btn-secondary">Close</button>
+        </div>
+
+        <!-- Conversations Panel -->
+        <div id="conversations-panel" class="panel hidden">
+            <h2>Conversations</h2>
+            <button id="new-conversation-btn" class="btn-primary">New Conversation</button>
+            <div id="conversations-list"></div>
+            <button id="close-conversations" class="btn-secondary">Close</button>
+        </div>
+
+        <!-- Chat Container -->
+        <div class="chat-container">
+            <div id="chat-messages" class="chat-messages"></div>
+            <div id="typing-indicator" class="typing-indicator hidden">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+
+        <!-- Input Area -->
+        <div class="input-container">
+            <input 
+                type="text" 
+                id="message-input" 
+                placeholder="Ask anything..." 
+                autocomplete="off"
+                aria-label="Message input"
+            >
+            <button id="send-btn" class="send-btn" aria-label="Send">Send</button>
+        </div>
+
+        <!-- Connection Status -->
+        <div id="connection-status" class="connection-status hidden"></div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
