@@ -30,13 +30,13 @@ def get_secret_key() -> str:
     # Check environment variable first
     secret = os.getenv("JWT_SECRET_KEY")
     
-    # Validate that secret is not empty or just whitespace
-    if secret and secret.strip():
+    # Validate that secret is not empty, not just whitespace, and not the placeholder
+    if secret and secret.strip() and secret.strip() != "change-me-in-production":
         return secret.strip()
     
-    # If env var is not set or is empty, use default and validate
+    # If env var is not set, is empty, or is the placeholder, use default and validate
     secret = os.getenv("JWT_SECRET_KEY", "change-me-in-production")
-    if not secret or not secret.strip() or secret == "change-me-in-production":
+    if not secret or not secret.strip() or secret.strip() == "change-me-in-production":
         raise ValueError("JWT_SECRET_KEY must be set in production")
     return secret.strip()
 
