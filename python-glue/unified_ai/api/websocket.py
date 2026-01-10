@@ -81,7 +81,7 @@ async def handle_websocket_chat(
         db_path = Path(config.storage.db_path).expanduser()
         context_manager = ContextManager(db_path)
         
-        adapters = get_adapters()
+        adapters = get_adapters(config)
         
         while True:
             # Receive message
@@ -126,7 +126,7 @@ async def handle_websocket_chat(
                 tool = data.get("tool")
                 
                 # Get or create context
-                context = await context_manager.get_or_create_context(
+                context = context_manager.get_or_create_context(
                     conversation_id,
                     project_id
                 )
@@ -172,9 +172,9 @@ async def handle_websocket_chat(
                     })
                     
                     # Update context
-                    context.add_message("user", message)
-                    context.add_message("assistant", "Response streamed")
-                    await context_manager.update_context(context)
+                    context_manager.add_message(context, "user", message)
+                    context_manager.add_message(context, "assistant", "Response streamed")
+                    context_manager.save_context(context)
                     
                 except Exception as e:
                     logger.error(f"Error streaming response: {e}")
