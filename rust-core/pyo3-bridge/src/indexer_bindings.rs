@@ -43,7 +43,10 @@ impl PyCodebaseIndexer {
                 let storage = IndexStorage::new(pool);
                 let indexer = CodebaseIndexer::new(project_id, storage);
                 
-                Ok(Self { indexer })
+                Ok(Self {
+                    indexer,
+                    runtime: std::sync::Mutex::new(rt),
+                })
             })
         })
     }
@@ -72,11 +75,7 @@ impl PyCodebaseIndexer {
         let path = PathBuf::from(file_path);
         
         py.allow_threads(|| {
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    format!("Failed to create runtime: {}", e)
-                ))?;
-            
+            let rt = self.runtime.lock().unwrap();
             rt.block_on(async {
                 indexer.index_file(&path).await
             })
@@ -110,11 +109,7 @@ impl PyCodebaseIndexer {
         let path = PathBuf::from(file_path);
         
         py.allow_threads(|| {
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    format!("Failed to create runtime: {}", e)
-                ))?;
-            
+            let rt = self.runtime.lock().unwrap();
             rt.block_on(async {
                 indexer.remove_file(&path).await
             })
@@ -128,6 +123,7 @@ impl PyCodebaseIndexer {
 #[pyclass]
 pub struct PySemanticSearch {
     search: SemanticSearch,
+    runtime: std::sync::Mutex<tokio::runtime::Runtime>,
 }
 
 #[pymethods]
@@ -167,11 +163,7 @@ impl PySemanticSearch {
         let search = &self.search;
         
         py.allow_threads(|| {
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    format!("Failed to create runtime: {}", e)
-                ))?;
-            
+            let rt = self.runtime.lock().unwrap();
             rt.block_on(async {
                 let results = search.search(&project_id, &query, limit).await
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
@@ -191,7 +183,7 @@ impl PySemanticSearch {
 #[pyclass]
 pub struct PyFileWatcher {
     watcher: Arc<Mutex<FileWatcher>>,
-    runtime_handle: tokio::runtime::Handle,
+    runtime: std::sync::Mutex<tokio::runtime::Runtime>,
 }
 
 #[pymethods]
@@ -237,10 +229,10 @@ impl PyFileWatcher {
     fn watch(&self, py: Python, path: String) -> PyResult<()> {
         let watcher = self.watcher.clone();
         let path_buf = PathBuf::from(path);
-        let handle = self.runtime_handle.clone();
         
         py.allow_threads(|| {
-            handle.block_on(async {
+            let rt = self.runtime.lock().unwrap();
+            rt.block_on(async {
                 let mut w = watcher.lock().await;
                 w.watch(path_buf)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(

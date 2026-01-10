@@ -8,6 +8,7 @@ use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 #[pyclass]
 pub struct PyMigrationRunner {
     pool: SqlitePool,
+    runtime: std::sync::Mutex<tokio::runtime::Runtime>,
 }
 
 #[pymethods]
@@ -35,7 +36,10 @@ impl PyMigrationRunner {
                     format!("Failed to create pool: {}", e)
                 ))?;
                 
-                Ok(Self { pool })
+                Ok(Self {
+                    pool,
+                    runtime: std::sync::Mutex::new(rt),
+                })
             })
         })
     }
@@ -44,11 +48,7 @@ impl PyMigrationRunner {
         let pool = self.pool.clone();
         
         py.allow_threads(|| {
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    format!("Failed to create runtime: {}", e)
-                ))?;
-            
+            let rt = self.runtime.lock().unwrap();
             rt.block_on(async {
                 let mut runner = MigrationRunner::new(pool);
                 rust_core::migrations::register_migrations(&mut runner);
@@ -64,11 +64,7 @@ impl PyMigrationRunner {
         let pool = self.pool.clone();
         
         py.allow_threads(|| {
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    format!("Failed to create runtime: {}", e)
-                ))?;
-            
+            let rt = self.runtime.lock().unwrap();
             rt.block_on(async {
                 let mut runner = MigrationRunner::new(pool);
                 rust_core::migrations::register_migrations(&mut runner);
@@ -84,11 +80,7 @@ impl PyMigrationRunner {
         let pool = self.pool.clone();
         
         py.allow_threads(|| {
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    format!("Failed to create runtime: {}", e)
-                ))?;
-            
+            let rt = self.runtime.lock().unwrap();
             rt.block_on(async {
                 let mut runner = MigrationRunner::new(pool);
                 rust_core::migrations::register_migrations(&mut runner);
