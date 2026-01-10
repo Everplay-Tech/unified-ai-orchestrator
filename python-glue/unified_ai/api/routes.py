@@ -1,6 +1,6 @@
 """API routes"""
 
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, WebSocket
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, WebSocket, Request
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -12,6 +12,9 @@ from ..config import load_config
 from ..cost import CostTracker
 from ..observability import trace_request, RequestMetrics
 from ..resilience import retry, ExponentialBackoffRetry
+from ..security.auth import require_auth
+from ..security.authorization import require_permission, Permission
+from ..security.audit import AuditLogger, AuditEventType, get_audit_logger
 from pathlib import Path
 
 router = APIRouter()
@@ -19,11 +22,48 @@ router = APIRouter()
 
 class ChatRequest(BaseModel):
     """Chat request model"""
-    message: str = Field(..., description="User message")
-    conversation_id: Optional[str] = Field(None, description="Conversation ID")
-    project_id: Optional[str] = Field(None, description="Project ID")
-    tool: Optional[str] = Field(None, description="Explicit tool to use")
+    message: str = Field(..., description="User message", min_length=1, max_length=100000)
+    conversation_id: Optional[str] = Field(None, description="Conversation ID", pattern="^[a-zA-Z0-9_-]+$")
+    project_id: Optional[str] = Field(None, description="Project ID", pattern="^[a-zA-Z0-9_/-]+$")
+    tool: Optional[str] = Field(None, description="Explicit tool to use", pattern="^[a-zA-Z0-9_-]+$")
     stream: bool = Field(False, description="Stream response")
+    
+    @classmethod
+    def validate_message(cls, v):
+        """Validate message content"""
+        from ..security.validation import validate_input, ValidationError
+        try:
+            return validate_input(v, max_length=100000, min_length=1)
+        except ValidationError as e:
+            raise ValueError(str(e))
+    
+    @classmethod
+    def validate_conversation_id(cls, v):
+        """Validate conversation ID"""
+        if v is None:
+            return v
+        from ..security.validation import validate_input, ValidationError
+        try:
+            return validate_input(v, pattern="^[a-zA-Z0-9_-]+$")
+        except ValidationError as e:
+            raise ValueError(str(e))
+    
+    @classmethod
+    def validate_project_id(cls, v):
+        """Validate project ID and prevent path traversal"""
+        if v is None:
+            return v
+        from ..security.validation import validate_input, sanitize_path, ValidationError
+        from pathlib import Path
+        try:
+            # Validate format
+            validated = validate_input(v, pattern="^[a-zA-Z0-9_/-]+$")
+            # Prevent path traversal
+            base_path = Path.home() / "projects"
+            sanitize_path(base_path, validated)
+            return validated
+        except ValidationError as e:
+            raise ValueError(str(e))
 
 
 class ChatResponse(BaseModel):
@@ -56,24 +96,25 @@ def get_router() -> Router:
 def get_context_manager() -> ContextManager:
     """Get context manager instance"""
     config = load_config()
-    db_path = Path(config.storage.db_path).expanduser()
-    return ContextManager(db_path)
+    return ContextManager(config=config)
 
 
 def get_cost_tracker() -> CostTracker:
     """Get cost tracker instance"""
     config = load_config()
-    db_path = Path(config.storage.db_path).expanduser()
-    return CostTracker(db_path)
+    return CostTracker(config=config)
 
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
+    req: Request,
     background_tasks: BackgroundTasks,
+    user: Dict[str, Any] = Depends(require_auth),
     router: Router = Depends(get_router),
     context_mgr: ContextManager = Depends(get_context_manager),
     cost_tracker: CostTracker = Depends(get_cost_tracker),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
 ):
     """Chat endpoint"""
     from ..adapters.base import Message as AdapterMessage, Context as AdapterContext
@@ -116,7 +157,7 @@ async def chat(
         selected_tool = adapters[selected_tool_name]
         
         # Get or create context
-        context = context_mgr.get_or_create_context(
+        context = await context_mgr.get_or_create_context(
             conversation_id=request.conversation_id,
             project_id=request.project_id,
         )
@@ -159,25 +200,41 @@ async def chat(
                 # Calculate cost (simplified - would use CostCalculator in production)
                 cost_usd = 0.0  # Would calculate based on model pricing
                 
-                background_tasks.add_task(
-                    cost_tracker.record_cost,
-                    tool=selected_tool.name,
-                    model=selected_tool.model if hasattr(selected_tool, "model") else "unknown",
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    cost_usd=cost_usd,
-                    conversation_id=context.conversation_id,
-                    project_id=request.project_id,
+                # Record cost asynchronously
+                import asyncio
+                asyncio.create_task(
+                    cost_tracker.record_cost(
+                        tool=selected_tool.name,
+                        model=selected_tool.model if hasattr(selected_tool, "model") else "unknown",
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        cost_usd=cost_usd,
+                        conversation_id=context.conversation_id,
+                        project_id=request.project_id,
+                    )
                 )
             
             # Save to context
-            context_mgr.add_message(context, "user", request.message)
-            context_mgr.add_message(context, "assistant", response.content)
-            context_mgr.add_tool_call(
+            await context_mgr.add_message(context, "user", request.message)
+            await context_mgr.add_message(context, "assistant", response.content)
+            await context_mgr.add_tool_call(
                 context,
                 selected_tool.name,
                 request.message,
                 response.content,
+            )
+            
+            # Log audit event (fire and forget)
+            import asyncio
+            asyncio.create_task(
+                audit_logger.log_event(
+                    event_type=AuditEventType.RESOURCE_ACCESS,
+                    user_id=user["user_id"],
+                    resource_type="conversation",
+                    resource_id=context.conversation_id,
+                    details={"tool": selected_tool.name, "message_length": len(request.message)},
+                    ip_address=req.client.host if req.client else None,
+                )
             )
             
             return ChatResponse(
@@ -194,13 +251,28 @@ async def chat(
 @router.get("/conversations/{conversation_id}", response_model=ConversationResponse)
 async def get_conversation(
     conversation_id: str,
+    req: Request,
+    user: Dict[str, Any] = Depends(require_auth),
     context_mgr: ContextManager = Depends(get_context_manager),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
 ):
     """Get conversation history"""
-    context = context_mgr.get_context(conversation_id)
+    context = await context_mgr.get_context(conversation_id)
     
     if not context:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # Log audit event (fire and forget)
+    import asyncio
+    asyncio.create_task(
+        audit_logger.log_event(
+            event_type=AuditEventType.RESOURCE_ACCESS,
+            user_id=user["user_id"],
+            resource_type="conversation",
+            resource_id=conversation_id,
+            ip_address=req.client.host if req.client else None,
+        )
+    )
     
     return ConversationResponse(
         conversation_id=context.conversation_id,
@@ -214,7 +286,9 @@ async def get_conversation(
 
 
 @router.get("/tools")
-async def list_tools():
+async def list_tools(
+    user: Dict[str, Any] = Depends(require_auth),
+):
     """List available tools"""
     config = load_config()
     adapters = get_adapters(config)

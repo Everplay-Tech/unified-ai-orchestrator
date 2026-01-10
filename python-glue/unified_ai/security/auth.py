@@ -1,20 +1,19 @@
 """Authentication: JWT, API keys, sessions"""
 
 import os
-import time
 import hashlib
-import sqlite3
+import uuid
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Optional, Dict, Any
 from functools import wraps
 
-from fastapi import HTTPException, Security, Depends, status
+from fastapi import HTTPException, Security, Depends, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
 from ..config import load_config
+from ..storage import create_storage_backend, DatabaseType, StorageBackend
 
 # Password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -25,7 +24,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 REFRESH_TOKEN_EXPIRE_DAYS = 7
 
 # Security scheme
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 
 def get_secret_key() -> str:
@@ -59,49 +58,72 @@ def hash_api_key(api_key: str) -> str:
     return hashlib.sha256(api_key.encode()).hexdigest()
 
 
-def get_db_path() -> Path:
-    """Get database path from config"""
+def get_storage_backend() -> StorageBackend:
+    """Get storage backend instance"""
     config = load_config()
-    return Path(config.storage.db_path).expanduser()
+    db_type = DatabaseType(config.storage.db_type.lower())
+    
+    if db_type == DatabaseType.POSTGRESQL:
+        if not config.storage.connection_string:
+            raise ValueError("PostgreSQL requires connection_string in config")
+        return create_storage_backend(db_type, connection_string=config.storage.connection_string)
+    else:
+        from pathlib import Path
+        return create_storage_backend(db_type, db_path=Path(config.storage.db_path))
 
 
-def get_user_by_api_key(api_key: str) -> Optional[Dict[str, Any]]:
+async def get_user_by_api_key(api_key: str) -> Optional[Dict[str, Any]]:
     """Get user by API key hash from database"""
-    db_path = get_db_path()
+    storage = get_storage_backend()
+    await storage.initialize()
     
-    # Ensure database exists
-    if not db_path.exists():
-        return None
+    api_key_hash = hash_api_key(api_key)
+    user = await storage.get_user_by_api_key_hash(api_key_hash)
     
-    try:
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        
-        # Hash the provided API key
-        api_key_hash = hash_api_key(api_key)
-        
-        # Query users table
-        cursor.execute(
-            "SELECT id, username, email, role FROM users WHERE api_key_hash = ?",
-            (api_key_hash,)
-        )
-        
-        row = cursor.fetchone()
-        conn.close()
-        
-        if row:
-            return {
-                "user_id": row["id"],
-                "username": row["username"],
-                "email": row["email"],
-                "role": row["role"],
-            }
-        
-        return None
-    except sqlite3.Error:
-        # Database error or table doesn't exist (migrations not run)
-        return None
+    await storage.close()
+    return user
+
+
+async def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
+    """Get user by username from database"""
+    storage = get_storage_backend()
+    await storage.initialize()
+    
+    user = await storage.get_user_by_username(username)
+    
+    await storage.close()
+    return user
+
+
+async def create_user(
+    username: str,
+    email: Optional[str],
+    password: Optional[str],
+    role: str = "user",
+) -> Dict[str, Any]:
+    """Create a new user"""
+    storage = get_storage_backend()
+    await storage.initialize()
+    
+    user_id = str(uuid.uuid4())
+    password_hash = hash_password(password) if password else None
+    
+    await storage.create_user(
+        user_id=user_id,
+        username=username,
+        email=email,
+        password_hash=password_hash,
+        role=role,
+    )
+    
+    await storage.close()
+    
+    return {
+        "user_id": user_id,
+        "username": username,
+        "email": email,
+        "role": role,
+    }
 
 
 def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
@@ -148,38 +170,64 @@ def verify_token(token: str, token_type: str = "access") -> Dict[str, Any]:
 
 
 async def authenticate_jwt(
-    credentials: HTTPAuthorizationCredentials = Security(security)
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(security)
 ) -> Dict[str, Any]:
     """Authenticate using JWT token"""
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required"
+        )
+    
     token = credentials.credentials
     payload = verify_token(token, "access")
     return payload
 
 
+async def authenticate_api_key_from_request(request: Request) -> Optional[str]:
+    """Extract API key from request"""
+    # Try X-API-Key header
+    api_key = request.headers.get("X-API-Key")
+    if api_key:
+        return api_key
+    
+    # Try Authorization: Bearer header
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        # Check if it's an API key (not a JWT)
+        if len(token) > 50:  # API keys are typically longer than JWTs
+            return token
+    
+    # Try query parameter
+    api_key = request.query_params.get("api_key")
+    if api_key:
+        return api_key
+    
+    return None
+
+
 async def authenticate_api_key(
-    api_key: Optional[str] = None,
-    header_key: Optional[str] = None,
+    request: Request,
 ) -> Dict[str, Any]:
     """Authenticate using API key"""
-    # Try to get API key from various sources
-    key = api_key or header_key or os.getenv("API_KEY")
+    api_key = await authenticate_api_key_from_request(request)
     
-    if not key:
+    if not api_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="API key required"
         )
     
     # Verify API key against database
-    user = get_user_by_api_key(key)
+    user = await get_user_by_api_key(api_key)
     
     if user:
         return user
     
     # Fallback to environment variable for backward compatibility
-    # This allows using API keys before migrations are run
     valid_key = os.getenv("VALID_API_KEY")
-    if valid_key and key == valid_key:
+    if valid_key and api_key == valid_key:
         return {"user_id": "api_user", "role": "user"}
     
     raise HTTPException(
@@ -189,9 +237,11 @@ async def authenticate_api_key(
 
 
 async def get_current_user(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Security(security, auto_error=False)
 ) -> Optional[Dict[str, Any]]:
     """Get current authenticated user"""
+    # Try JWT first
     if credentials:
         try:
             return await authenticate_jwt(credentials)
@@ -200,22 +250,22 @@ async def get_current_user(
     
     # Try API key authentication
     try:
-        return await authenticate_api_key()
+        return await authenticate_api_key(request)
     except HTTPException:
         pass
     
     return None
 
 
-def require_auth(func):
-    """Decorator to require authentication"""
-    @wraps(func)
-    async def wrapper(*args, **kwargs):
-        user = await get_current_user()
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication required"
-            )
-        return await func(*args, **kwargs)
-    return wrapper
+async def require_auth(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(security, auto_error=False)
+) -> Dict[str, Any]:
+    """Dependency to require authentication"""
+    user = await get_current_user(request, credentials)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required"
+        )
+    return user

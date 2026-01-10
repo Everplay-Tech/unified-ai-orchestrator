@@ -6,6 +6,18 @@ from typing import Optional, Dict, Any
 from enum import Enum
 
 from ..observability import get_logger
+from ..config import load_config
+from ..storage import create_storage_backend, DatabaseType
+from pathlib import Path
+
+def get_storage_backend():
+    """Get storage backend"""
+    config = load_config()
+    db_type = DatabaseType(config.storage.db_type.lower())
+    if db_type == DatabaseType.POSTGRESQL:
+        return create_storage_backend(db_type, connection_string=config.storage.connection_string)
+    else:
+        return create_storage_backend(db_type, db_path=Path(config.storage.db_path))
 
 logger = get_logger(__name__)
 
@@ -31,7 +43,7 @@ class AuditLogger:
         self.logger = logging.getLogger("audit")
         self.logger.setLevel(logging.INFO)
     
-    def log_event(
+    async def log_event(
         self,
         event_type: AuditEventType,
         user_id: Optional[str] = None,
@@ -58,36 +70,54 @@ class AuditLogger:
             "Audit event",
             extra={"audit": event_data}
         )
+        
+        # Store in database
+        try:
+            storage = get_storage_backend()
+            await storage.initialize()
+            await storage.log_audit_event(
+                event_type=event_type.value,
+                user_id=user_id,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                details=details,
+            )
+            await storage.close()
+        except Exception as e:
+            # Don't fail the request if audit logging fails
+            logger.error(f"Failed to store audit event in database: {e}")
     
-    def log_auth_success(
+    async def log_auth_success(
         self,
         user_id: str,
         auth_method: str,
         ip_address: Optional[str] = None,
     ):
         """Log successful authentication"""
-        self.log_event(
+        await self.log_event(
             event_type=AuditEventType.AUTH_SUCCESS,
             user_id=user_id,
             details={"auth_method": auth_method},
             ip_address=ip_address,
         )
     
-    def log_auth_failure(
+    async def log_auth_failure(
         self,
         user_id: Optional[str],
         reason: str,
         ip_address: Optional[str] = None,
     ):
         """Log failed authentication attempt"""
-        self.log_event(
+        await self.log_event(
             event_type=AuditEventType.AUTH_FAILURE,
             user_id=user_id,
             details={"reason": reason},
             ip_address=ip_address,
         )
     
-    def log_permission_denied(
+    async def log_permission_denied(
         self,
         user_id: str,
         resource_type: str,
@@ -96,7 +126,7 @@ class AuditLogger:
         ip_address: Optional[str] = None,
     ):
         """Log permission denied event"""
-        self.log_event(
+        await self.log_event(
             event_type=AuditEventType.PERMISSION_DENIED,
             user_id=user_id,
             resource_type=resource_type,
@@ -105,7 +135,7 @@ class AuditLogger:
             ip_address=ip_address,
         )
     
-    def log_resource_access(
+    async def log_resource_access(
         self,
         user_id: str,
         resource_type: str,
@@ -114,7 +144,7 @@ class AuditLogger:
         ip_address: Optional[str] = None,
     ):
         """Log resource access"""
-        self.log_event(
+        await self.log_event(
             event_type=AuditEventType.RESOURCE_ACCESS,
             user_id=user_id,
             resource_type=resource_type,

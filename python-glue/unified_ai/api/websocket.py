@@ -76,10 +76,9 @@ async def handle_websocket_chat(
         }
         router = Router(routing_rules, config.routing.default_tool)
         
-        # Initialize ContextManager with db_path from config
-        from pathlib import Path
-        db_path = Path(config.storage.db_path).expanduser()
-        context_manager = ContextManager(db_path)
+        # Initialize ContextManager
+        context_manager = ContextManager(config=config)
+        await context_manager.initialize()
         
         adapters = get_adapters(config)
         
@@ -126,9 +125,9 @@ async def handle_websocket_chat(
                 tool = data.get("tool")
                 
                 # Get or create context
-                context = context_manager.get_or_create_context(
-                    conversation_id,
-                    project_id
+                context = await context_manager.get_or_create_context(
+                    conversation_id=conversation_id,
+                    project_id=project_id
                 )
                 
                 # Route to tool

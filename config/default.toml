@@ -1,5 +1,7 @@
 [storage]
-db_path = "~/.uai/db.sqlite"
+db_type = "sqlite"  # "postgresql" or "sqlite"
+db_path = "~/.uai/db.sqlite"  # For SQLite
+# connection_string = "postgresql://user:password@localhost/dbname"  # For PostgreSQL
 index_path = "~/.uai/indexes"
 
 [tools.claude]

@@ -6,6 +6,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 from typing import List, Optional
 import os
+import uuid
+import secrets
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -19,22 +21,29 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
         
         # HSTS (only for HTTPS)
         if request.url.scheme == "https":
-            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
         
-        # Content Security Policy
+        # Content Security Policy (strict)
         csp = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline'; "
-            "style-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "  # Needed for some UI frameworks
             "img-src 'self' data: https:; "
             "font-src 'self' data:; "
             "connect-src 'self' https:; "
-            "frame-ancestors 'none';"
+            "frame-ancestors 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self';"
         )
         response.headers["Content-Security-Policy"] = csp
+        
+        # Add request ID for tracing
+        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        response.headers["X-Request-ID"] = request_id
         
         return response
 
@@ -51,17 +60,26 @@ def setup_cors(app, allowed_origins: List[str] = None):
         except Exception:
             pass
         
-        # Default: allow all origins in development, restrict in production
+        # Default: empty list (no CORS) - must be explicitly configured
         if allowed_origins is None:
-            allowed_origins = ["*"]  # Should be restricted in production
+            allowed_origins = []
+        
+        # Replace wildcard with empty list for security
+        if "*" in allowed_origins:
+            import os
+            if os.getenv("ENVIRONMENT") != "development":
+                allowed_origins = []  # Disable wildcard in production
+                import warnings
+                warnings.warn("CORS wildcard (*) is disabled in production. Configure allowed_origins explicitly.")
     
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=["X-Request-ID"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Request-ID"],
+        expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining"],
+        max_age=3600,
     )
 
 
@@ -126,7 +144,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         
         # Check prefix matches for other public paths
-        public_paths = ["/health", "/metrics", "/static"]
+        public_paths = ["/health", "/metrics", "/static", "/api/v1/auth/login", "/api/v1/auth/refresh", "/docs", "/openapi.json"]
         if any(path.startswith(public) for public in public_paths):
             return await call_next(request)
         

@@ -79,12 +79,12 @@ async def _chat_async(message: str, tool: Optional[str], project: Optional[str])
     router = Router(routing_rules, config.routing.default_tool)
     
     # Initialize context manager
-    db_path = Path(config.storage.db_path).expanduser()
-    context_mgr = ContextManager(db_path)
+    context_mgr = ContextManager(config=config)
+    await context_mgr.initialize()
     
     # Get or create conversation context
     conversation_id = None  # Could be passed as parameter in future
-    context = context_mgr.get_or_create_context(
+    context = await context_mgr.get_or_create_context(
         conversation_id=conversation_id,
         project_id=project,
     )
@@ -141,9 +141,9 @@ async def _chat_async(message: str, tool: Optional[str], project: Optional[str])
         response = await selected_tool.chat(messages, adapter_context)
         
         # Save to context
-        context_mgr.add_message(context, "user", message)
-        context_mgr.add_message(context, "assistant", response.content)
-        context_mgr.add_tool_call(
+        await context_mgr.add_message(context, "user", message)
+        await context_mgr.add_message(context, "assistant", response.content)
+        await context_mgr.add_tool_call(
             context,
             selected_tool.name,
             message,

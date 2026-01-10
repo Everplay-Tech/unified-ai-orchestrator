@@ -27,7 +27,9 @@ class ToolConfig:
 @dataclass
 class StorageConfig:
     """Storage configuration"""
-    db_path: str = "~/.uai/db.sqlite"
+    db_type: str = "sqlite"  # "postgresql" or "sqlite"
+    db_path: str = "~/.uai/db.sqlite"  # For SQLite
+    connection_string: Optional[str] = None  # For PostgreSQL (e.g., "postgresql://user:pass@localhost/dbname")
     index_path: str = "~/.uai/indexes"
 
 
@@ -72,7 +74,13 @@ class Config:
         config = cls()
         
         if "storage" in data:
-            config.storage = StorageConfig(**data["storage"])
+            storage_data = data["storage"]
+            config.storage = StorageConfig(
+                db_type=storage_data.get("db_type", "sqlite"),
+                db_path=storage_data.get("db_path", "~/.uai/db.sqlite"),
+                connection_string=storage_data.get("connection_string"),
+                index_path=storage_data.get("index_path", "~/.uai/indexes"),
+            )
         
         if "routing" in data:
             config.routing = RoutingConfig(**data["routing"])
@@ -93,7 +101,9 @@ class Config:
         """Convert Config to dictionary"""
         result = {
             "storage": {
+                "db_type": self.storage.db_type,
                 "db_path": self.storage.db_path,
+                "connection_string": self.storage.connection_string,
                 "index_path": self.storage.index_path,
             },
             "routing": {

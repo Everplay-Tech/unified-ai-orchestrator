@@ -9,7 +9,9 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from .routes import router
+from .auth_routes import router as auth_router
 from .middleware import SecurityHeadersMiddleware, setup_cors, APIKeyMiddleware
+from .csrf import CSRFProtectionMiddleware
 from ..config import load_config
 from ..observability import setup_logging, MetricsCollector
 
@@ -31,12 +33,28 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     """Create and configure FastAPI application"""
+    from fastapi.middleware.trustedhost import TrustedHostMiddleware
+    
     app = FastAPI(
         title="Unified AI Orchestrator API",
         version="1.0.0",
         description="Unified AI tool orchestration system API",
         lifespan=lifespan,
     )
+    
+    # Add request size limit middleware (10MB)
+    @app.middleware("http")
+    async def limit_request_size(request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length:
+            size = int(content_length)
+            if size > 10 * 1024 * 1024:  # 10MB
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    status_code=413,
+                    content={"error": "Request too large. Maximum size is 10MB."}
+                )
+        return await call_next(request)
     
     # Setup CORS
     setup_cors(app)
@@ -60,6 +78,12 @@ def create_app() -> FastAPI:
     # Add security headers middleware
     app.add_middleware(SecurityHeadersMiddleware)
     
+    # Add CSRF protection (only for state-changing operations)
+    # Note: CSRF protection can be disabled for API-only usage
+    import os
+    if os.getenv("ENABLE_CSRF", "true").lower() == "true":
+        app.add_middleware(CSRFProtectionMiddleware)
+    
     # Mount static files
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():
@@ -75,6 +99,7 @@ def create_app() -> FastAPI:
         return {"message": "Unified AI Orchestrator API", "version": "1.0.0"}
     
     # Include routers
+    app.include_router(auth_router, prefix="/api/v1")
     app.include_router(router, prefix="/api/v1")
     
     @app.get("/health")
@@ -96,6 +121,31 @@ def create_app() -> FastAPI:
     async def global_exception_handler(request, exc):
         """Global exception handler"""
         from fastapi.responses import JSONResponse
+        from pydantic import ValidationError
+        from ..security.validation import ValidationError as SecurityValidationError
+        
+        # Handle Pydantic validation errors
+        if isinstance(exc, ValidationError):
+            return JSONResponse(
+                status_code=422,
+                content={"error": "Validation error", "details": exc.errors()},
+            )
+        
+        # Handle security validation errors
+        if isinstance(exc, SecurityValidationError):
+            return JSONResponse(
+                status_code=400,
+                content={"error": str(exc)},
+            )
+        
+        # Handle HTTP exceptions
+        if isinstance(exc, HTTPException):
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"error": exc.detail},
+            )
+        
+        # Generic error
         return JSONResponse(
             status_code=500,
             content={"error": str(exc)},

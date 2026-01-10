@@ -1,12 +1,14 @@
 """Context manager for maintaining conversation history"""
 
 import json
-import sqlite3
 import uuid
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime
+
+from .storage import create_storage_backend, DatabaseType, StorageBackend
+from .config import load_config
 
 try:
     from unified_ai_orchestrator.pyo3_bridge import PyContextWindowManager, PyContextCompressor
@@ -61,10 +63,37 @@ class Context:
 class ContextManager:
     """Manages conversation context and history"""
 
-    def __init__(self, db_path: Path):
-        self.db_path = Path(db_path).expanduser()
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
+    def __init__(self, storage_backend: Optional[StorageBackend] = None, config=None):
+        """
+        Initialize context manager
+        
+        Args:
+            storage_backend: Optional storage backend instance
+            config: Optional config instance (will load if not provided)
+        """
+        if config is None:
+            config = load_config()
+        
+        self.config = config
+        
+        # Initialize storage backend
+        if storage_backend:
+            self.storage = storage_backend
+        else:
+            # Create storage backend from config
+            db_type = DatabaseType(config.storage.db_type.lower())
+            if db_type == DatabaseType.POSTGRESQL:
+                if not config.storage.connection_string:
+                    raise ValueError("PostgreSQL requires connection_string in config")
+                self.storage = create_storage_backend(
+                    db_type,
+                    connection_string=config.storage.connection_string
+                )
+            else:
+                self.storage = create_storage_backend(
+                    db_type,
+                    db_path=Path(config.storage.db_path)
+                )
         
         # Initialize Rust-based context management components if available
         if HAS_PYO3:
@@ -73,103 +102,83 @@ class ContextManager:
         else:
             self.window_manager = None
             self.compressor = None
-
-    def _init_db(self):
-        """Initialize database tables"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS contexts (
-                conversation_id TEXT PRIMARY KEY,
-                project_id TEXT,
-                data TEXT NOT NULL,
-                updated_at INTEGER NOT NULL
-            )
-        """)
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                conversation_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                timestamp INTEGER NOT NULL,
-                FOREIGN KEY (conversation_id) REFERENCES contexts(conversation_id)
-            )
-        """)
-
-        conn.commit()
-        conn.close()
-
-    def get_or_create_context(
+    
+    async def initialize(self) -> None:
+        """Initialize the storage backend"""
+        await self.storage.initialize()
+    
+    async def get_or_create_context(
         self,
         conversation_id: Optional[str] = None,
         project_id: Optional[str] = None,
     ) -> Context:
         """Get existing context or create new one"""
+        await self.initialize()
+        
         if conversation_id:
-            context = self.get_context(conversation_id)
+            context = await self.get_context(conversation_id)
             if context:
                 return context
 
         # Create new context
+        conversation_id = conversation_id or str(uuid.uuid4())
         context = Context(
-            conversation_id=conversation_id or str(uuid.uuid4()),
+            conversation_id=conversation_id,
             project_id=project_id,
             messages=[],
             codebase_context=None,
             tool_history=[],
         )
 
-        self.save_context(context)
+        await self.save_context(context)
         return context
 
-    def get_context(self, conversation_id: str) -> Optional[Context]:
+    async def get_context(self, conversation_id: str) -> Optional[Context]:
         """Get context by conversation ID"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        cursor.execute(
-            "SELECT data FROM contexts WHERE conversation_id = ?",
-            (conversation_id,)
-        )
-
-        row = cursor.fetchone()
-        conn.close()
-
-        if row:
-            data = json.loads(row[0])
+        await self.initialize()
+        
+        data_str = await self.storage.load_context(conversation_id)
+        if data_str:
+            data = json.loads(data_str)
             return Context.from_dict(data)
 
         return None
 
-    def save_context(self, context: Context):
+    async def save_context(self, context: Context) -> None:
         """Save context to database"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
+        await self.initialize()
+        
         data = json.dumps(context.to_dict())
         updated_at = int(datetime.now().timestamp())
+        
+        await self.storage.save_context(
+            context.conversation_id,
+            context.project_id,
+            data,
+            updated_at
+        )
 
-        cursor.execute("""
-            INSERT OR REPLACE INTO contexts (conversation_id, project_id, data, updated_at)
-            VALUES (?, ?, ?, ?)
-        """, (context.conversation_id, context.project_id, data, updated_at))
-
-        conn.commit()
-        conn.close()
-
-    def add_message(self, context: Context, role: str, content: str):
+    async def add_message(self, context: Context, role: str, content: str) -> None:
         """Add a message to the context"""
+        await self.initialize()
+        
         timestamp = int(datetime.now().timestamp())
         message = Message(role=role, content=content, timestamp=timestamp)
         context.messages.append(message)
-        self.save_context(context)
+        
+        # Also save to messages table
+        await self.storage.add_message(
+            context.conversation_id,
+            role,
+            content,
+            timestamp
+        )
+        
+        await self.save_context(context)
 
-    def add_tool_call(
+    async def add_tool_call(
         self, context: Context, tool: str, request: str, response: str
-    ):
+    ) -> None:
         """Add a tool call to the history"""
         timestamp = int(datetime.now().timestamp())
         tool_call = {
@@ -179,7 +188,7 @@ class ContextManager:
             "response": response,
         }
         context.tool_history.append(tool_call)
-        self.save_context(context)
+        await self.save_context(context)
     
     def compress(self, context: Context) -> Context:
         """Compress context by removing redundancy"""
@@ -282,3 +291,7 @@ class ContextManager:
         kept_messages.reverse()
         context.messages = kept_messages
         return context
+    
+    async def close(self) -> None:
+        """Close the storage backend connection"""
+        await self.storage.close()
