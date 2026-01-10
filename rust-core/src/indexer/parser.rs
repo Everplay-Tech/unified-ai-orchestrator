@@ -4,6 +4,14 @@ use tree_sitter::{Language, Parser, Tree};
 use std::collections::HashMap;
 use std::path::Path;
 
+// Import tree-sitter language grammars
+extern "C" {
+    fn tree_sitter_python() -> Language;
+    fn tree_sitter_rust() -> Language;
+    fn tree_sitter_javascript() -> Language;
+    fn tree_sitter_typescript() -> Language;
+}
+
 #[derive(Debug, Clone)]
 pub struct CodeBlock {
     pub block_type: String, // function, class, method, etc.
@@ -22,9 +30,32 @@ impl ASTParser {
     pub fn new() -> Self {
         let mut parsers = HashMap::new();
         
-        // Initialize parsers for supported languages
-        // Note: In a real implementation, you'd load tree-sitter language grammars
-        // For now, we'll create a basic parser structure
+        // Initialize parsers for supported languages with tree-sitter grammars
+        unsafe {
+            // Python
+            let mut python_parser = Parser::new();
+            if python_parser.set_language(tree_sitter_python()).is_ok() {
+                parsers.insert("python".to_string(), python_parser);
+            }
+            
+            // Rust
+            let mut rust_parser = Parser::new();
+            if rust_parser.set_language(tree_sitter_rust()).is_ok() {
+                parsers.insert("rust".to_string(), rust_parser);
+            }
+            
+            // JavaScript
+            let mut js_parser = Parser::new();
+            if js_parser.set_language(tree_sitter_javascript()).is_ok() {
+                parsers.insert("javascript".to_string(), js_parser);
+            }
+            
+            // TypeScript
+            let mut ts_parser = Parser::new();
+            if ts_parser.set_language(tree_sitter_typescript()).is_ok() {
+                parsers.insert("typescript".to_string(), ts_parser);
+            }
+        }
         
         Self { parsers }
     }
@@ -34,15 +65,45 @@ impl ASTParser {
         let parser = self.parsers
             .entry(language.to_string())
             .or_insert_with(|| {
+                // Try to initialize parser for this language
                 let mut p = Parser::new();
-                // Set language based on file type
-                // p.set_language(language).unwrap();
+                unsafe {
+                    match language {
+                        "python" => {
+                            if p.set_language(tree_sitter_python()).is_ok() {
+                                return p;
+                            }
+                        }
+                        "rust" => {
+                            if p.set_language(tree_sitter_rust()).is_ok() {
+                                return p;
+                            }
+                        }
+                        "javascript" => {
+                            if p.set_language(tree_sitter_javascript()).is_ok() {
+                                return p;
+                            }
+                        }
+                        "typescript" => {
+                            if p.set_language(tree_sitter_typescript()).is_ok() {
+                                return p;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                // Return uninitialized parser if language not supported
                 p
             });
         
+        // Check if parser has a language set
+        if parser.language().is_none() {
+            return Err(format!("Language '{}' not supported or grammar failed to load", language));
+        }
+        
         // Parse the content
         let tree = parser.parse(content, None)
-            .ok_or_else(|| "Failed to parse".to_string())?;
+            .ok_or_else(|| format!("Failed to parse {} code", language))?;
         
         // Extract code blocks
         self.extract_blocks(&tree, content, language)
@@ -99,11 +160,11 @@ impl ASTParser {
         let node = cursor.node();
         let node_type = node.kind();
         
-        // Extract relevant node types
+        // Extract relevant node types (actual tree-sitter node types)
         let relevant_types = match language {
-            "python" => vec!["function_definition", "class_definition"],
-            "rust" => vec!["function_item", "struct_item", "impl_item"],
-            "javascript" => vec!["function_declaration", "class_declaration", "method_definition"],
+            "python" => vec!["function_definition", "class_definition", "decorated_definition"],
+            "rust" => vec!["function_item", "struct_item", "impl_item", "trait_item", "enum_item"],
+            "javascript" | "typescript" => vec!["function_declaration", "class_declaration", "method_definition", "arrow_function", "function"],
             _ => vec!["function", "class", "method"],
         };
         

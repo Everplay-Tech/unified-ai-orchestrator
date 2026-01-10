@@ -48,13 +48,17 @@ impl FileWatcher {
                 }
                 Ok(Err(e)) => {
                     eprintln!("Watcher error: {}", e);
+                    // Continue processing despite errors
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     // If we have pending events and enough time has passed, process them
                     if !pending_events.is_empty() 
                         && last_event_time.elapsed() >= self.debounce_duration 
                     {
-                        self.process_pending_events(&mut pending_events).await?;
+                        if let Err(e) = self.process_pending_events(&mut pending_events).await {
+                            eprintln!("Error processing file events: {}", e);
+                            // Continue watching despite processing errors
+                        }
                     }
                     
                     // Small sleep to avoid busy waiting
@@ -67,9 +71,16 @@ impl FileWatcher {
         }
     }
     
+    /// Stop watching (cleanup)
+    pub fn stop(&mut self) -> Result<(), notify::Error> {
+        // Watcher will be dropped, which stops watching
+        Ok(())
+    }
+    
     async fn process_pending_events(&mut self, events: &mut Vec<Event>) -> Result<(), String> {
         // Group events by path to avoid duplicate processing
         let mut paths_to_update = std::collections::HashSet::new();
+        let mut paths_to_remove = std::collections::HashSet::new();
         
         for event in events.drain(..) {
             match event.kind {
@@ -83,8 +94,7 @@ impl FileWatcher {
                 EventKind::Remove(_) => {
                     for path in event.paths {
                         if path.is_file() {
-                            // Remove from index
-                            self.indexer.remove_file(&path).await?;
+                            paths_to_remove.insert(path);
                         }
                     }
                 }
@@ -92,10 +102,24 @@ impl FileWatcher {
             }
         }
         
+        // Remove files from index first
+        for path in paths_to_remove {
+            if let Err(e) = self.indexer.remove_file(&path).await {
+                eprintln!("Failed to remove {} from index: {}", path.display(), e);
+                // Continue processing other files
+            }
+        }
+        
         // Update indexed files
         for path in paths_to_update {
+            // Skip if file doesn't exist (might have been deleted)
+            if !path.exists() {
+                continue;
+            }
+            
             if let Err(e) = self.indexer.update_file(&path).await {
                 eprintln!("Failed to index {}: {}", path.display(), e);
+                // Continue processing other files
             }
         }
         

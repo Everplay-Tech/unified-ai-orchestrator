@@ -4,8 +4,11 @@ use pyo3::prelude::*;
 use rust_core::indexer::codebase::CodebaseIndexer;
 use rust_core::indexer::search::SemanticSearch;
 use rust_core::indexer::storage::IndexStorage;
+use rust_core::indexer::watcher::FileWatcher;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[pyclass]
 pub struct PyCodebaseIndexer {
@@ -181,6 +184,111 @@ impl PySemanticSearch {
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
                 format!("Search failed: {}", e)
             ))
+        })
+    }
+}
+
+#[pyclass]
+pub struct PyFileWatcher {
+    watcher: Arc<Mutex<FileWatcher>>,
+}
+
+#[pymethods]
+impl PyFileWatcher {
+    #[new]
+    fn new(project_id: String, db_path: String) -> PyResult<Self> {
+        Python::with_gil(|py| {
+            py.allow_threads(|| {
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                        format!("Failed to create runtime: {}", e)
+                    ))?;
+                
+                let pool = rt.block_on(async {
+                    SqlitePoolOptions::new()
+                        .max_connections(5)
+                        .connect_with(
+                            sqlx::sqlite::SqliteConnectOptions::new()
+                                .filename(&db_path)
+                                .create_if_missing(true),
+                        )
+                        .await
+                        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                            format!("Failed to create pool: {}", e)
+                        ))
+                })?;
+                
+                let storage = IndexStorage::new(pool);
+                let indexer = CodebaseIndexer::new(project_id, storage);
+                let watcher = FileWatcher::new(indexer)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                        format!("Failed to create watcher: {}", e)
+                    ))?;
+                
+                Ok(Self {
+                    watcher: Arc::new(Mutex::new(watcher)),
+                })
+            })
+        })
+    }
+    
+    fn watch(&self, py: Python, path: String) -> PyResult<()> {
+        let watcher = self.watcher.clone();
+        let path_buf = PathBuf::from(path);
+        
+        py.allow_threads(|| {
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    format!("Failed to create runtime: {}", e)
+                ))?;
+            
+            rt.block_on(async {
+                let mut w = watcher.lock().await;
+                w.watch(path_buf)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                        format!("Failed to watch path: {}", e)
+                    ))
+            })
+        })
+    }
+    
+    fn start(&self, py: Python) -> PyResult<()> {
+        let watcher = self.watcher.clone();
+        
+        // Start processing events in background
+        py.allow_threads(|| {
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    format!("Failed to create runtime: {}", e)
+                ))?;
+            
+            rt.spawn(async move {
+                let mut w = watcher.lock().await;
+                if let Err(e) = w.process_events().await {
+                    eprintln!("File watcher error: {}", e);
+                }
+            });
+            
+            Ok(())
+        })
+    }
+    
+    fn stop(&self, py: Python) -> PyResult<()> {
+        let watcher = self.watcher.clone();
+        
+        py.allow_threads(|| {
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    format!("Failed to create runtime: {}", e)
+                ))?;
+            
+            rt.block_on(async {
+                let mut w = watcher.lock().await;
+                w.stop()
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                        format!("Failed to stop watcher: {}", e)
+                    ))
+            })
         })
     }
 }

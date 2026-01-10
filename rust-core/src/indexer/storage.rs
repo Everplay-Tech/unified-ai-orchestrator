@@ -58,12 +58,12 @@ impl IndexStorage {
             .execute(&self.pool)
             .await?;
         
-        // Insert new blocks
+        // Insert new blocks (embeddings will be added separately if needed)
         for block in blocks {
             sqlx::query(
                 r#"
-                INSERT INTO code_blocks (file_id, block_type, name, content, start_line, end_line)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO code_blocks (file_id, block_type, name, content, start_line, end_line, embedding)
+                VALUES (?, ?, ?, ?, ?, ?, NULL)
                 "#,
             )
             .bind(file_id.0)
@@ -131,5 +131,95 @@ impl IndexStorage {
         .await?;
         
         Ok(results)
+    }
+    
+    /// Store embedding for a code block
+    pub async fn store_embedding(
+        &self,
+        block_id: i64,
+        embedding: &[f32],
+    ) -> Result<()> {
+        // Serialize embedding as BLOB (using simple binary format)
+        let embedding_bytes: Vec<u8> = embedding.iter()
+            .flat_map(|f| f.to_le_bytes().to_vec())
+            .collect();
+        
+        sqlx::query(
+            "UPDATE code_blocks SET embedding = ? WHERE id = ?"
+        )
+        .bind(embedding_bytes)
+        .bind(block_id)
+        .execute(&self.pool)
+        .await?;
+        
+        Ok(())
+    }
+    
+    /// Retrieve embeddings for semantic search
+    pub async fn get_block_embeddings(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<(i64, Vec<f32>)>> {
+        let results = sqlx::query_as::<_, (i64, Option<Vec<u8>>)>(
+            r#"
+            SELECT c.id, c.embedding
+            FROM code_blocks c
+            JOIN indexed_files f ON c.file_id = f.id
+            WHERE f.project_id = ? AND c.embedding IS NOT NULL
+            "#,
+        )
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await?;
+        
+        let mut embeddings = Vec::new();
+        for (block_id, embedding_bytes) in results {
+            if let Some(bytes) = embedding_bytes {
+                // Deserialize embedding from bytes
+                let mut embedding = Vec::new();
+                for chunk in bytes.chunks(4) {
+                    if chunk.len() == 4 {
+                        let value = f32::from_le_bytes([
+                            chunk[0], chunk[1], chunk[2], chunk[3]
+                        ]);
+                        embedding.push(value);
+                    }
+                }
+                if !embedding.is_empty() {
+                    embeddings.push((block_id, embedding));
+                }
+            }
+        }
+        
+        Ok(embeddings)
+    }
+    
+    /// Get block ID for a file path and block name
+    pub async fn get_block_id(
+        &self,
+        project_id: &str,
+        file_path: &str,
+        block_name: Option<&str>,
+    ) -> Result<Option<i64>> {
+        let result = if let Some(name) = block_name {
+            sqlx::query_as::<_, (i64,)>(
+                r#"
+                SELECT c.id
+                FROM code_blocks c
+                JOIN indexed_files f ON c.file_id = f.id
+                WHERE f.project_id = ? AND f.file_path = ? AND c.name = ?
+                LIMIT 1
+                "#,
+            )
+            .bind(project_id)
+            .bind(file_path)
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?
+        } else {
+            None
+        };
+        
+        Ok(result.map(|(id,)| id))
     }
 }

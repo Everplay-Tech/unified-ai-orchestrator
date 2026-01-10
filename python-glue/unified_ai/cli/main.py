@@ -16,6 +16,7 @@ from ..utils.auth import get_api_key, set_api_key, get_secret
 from ..utils.auth import set_secret as set_secret_auth
 from ..router import Router
 from ..context_manager import ContextManager
+from ..migrations.cli import run_migrations, migration_status, rollback_migration
 
 app = typer.Typer(help="Unified AI Orchestration System")
 console = Console()
@@ -284,6 +285,35 @@ def mobile_key(
         else:
             console.print("\n[yellow]No mobile API key configured.[/yellow]")
             console.print("Generate one with: [cyan]uai mobile-key --generate[/cyan]\n")
+
+
+@app.command()
+def migrations(
+    command: str = typer.Argument(..., help="Command: status, up, or down"),
+    db_path: Optional[str] = typer.Option(None, "--db-path", help="Path to database file (defaults to config)"),
+    target_version: Optional[int] = typer.Option(None, "--version", "-v", help="Target version for up/down"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Dry run mode (status only)"),
+):
+    """Manage database migrations"""
+    # Get database path from config if not provided
+    if db_path is None:
+        config = load_config()
+        db_path = config.storage.db_path
+    
+    db_path_obj = Path(db_path).expanduser()
+    
+    if command == "status":
+        migration_status(db_path_obj)
+    elif command == "up":
+        run_migrations(db_path_obj, target_version=target_version, dry_run=dry_run)
+    elif command == "down":
+        if target_version is None:
+            console.print("[red]Target version required for rollback. Use --version[/red]")
+            raise typer.Exit(1)
+        rollback_migration(db_path_obj, target_version)
+    else:
+        console.print(f"[red]Unknown command: {command}. Use: status, up, or down[/red]")
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

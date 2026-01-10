@@ -1,6 +1,8 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rust_core::context::{ContextManager, ContextStorage, Context};
+use rust_core::context::window::ContextWindowManager;
+use rust_core::context::compression::ContextCompressor;
 use rust_core::error::Result;
 use std::path::PathBuf;
 use pyo3_asyncio::tokio::future_into_py;
@@ -142,4 +144,145 @@ impl PyContextManager {
             })
         })
     }
+}
+
+#[pyclass]
+pub struct PyContextWindowManager {
+    inner: ContextWindowManager,
+}
+
+#[pymethods]
+impl PyContextWindowManager {
+    #[new]
+    fn new(reserved_tokens: Option<usize>) -> Self {
+        Self {
+            inner: ContextWindowManager::new(reserved_tokens.unwrap_or(1000)),
+        }
+    }
+    
+    fn manage_context(&self, py: Python, context_dict: &PyDict, model: String) -> PyResult<PyDict> {
+        // Convert Python dict to Rust Context
+        let mut context = dict_to_context(context_dict)?;
+        
+        // Manage context window
+        self.inner.manage_context(&mut context, &model);
+        
+        // Convert back to Python dict
+        context_to_dict(py, &context)
+    }
+    
+    fn manage_context_with_reserved(&self, py: Python, context_dict: &PyDict, model: String, reserved_tokens: usize) -> PyResult<PyDict> {
+        // Create window manager with custom reserved tokens
+        let manager = ContextWindowManager::new(reserved_tokens);
+        
+        // Convert Python dict to Rust Context
+        let mut context = dict_to_context(context_dict)?;
+        
+        // Manage context window
+        manager.manage_context(&mut context, &model);
+        
+        // Convert back to Python dict
+        context_to_dict(py, &context)
+    }
+}
+
+#[pyclass]
+pub struct PyContextCompressor {
+    inner: ContextCompressor,
+}
+
+#[pymethods]
+impl PyContextCompressor {
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: ContextCompressor::default(),
+        }
+    }
+    
+    fn compress(&self, py: Python, context_dict: &PyDict) -> PyResult<PyDict> {
+        // Convert Python dict to Rust Context
+        let mut context = dict_to_context(context_dict)?;
+        
+        // Compress context
+        self.inner.compress(&mut context);
+        
+        // Convert back to Python dict
+        context_to_dict(py, &context)
+    }
+}
+
+// Helper functions to convert between Python dicts and Rust Context
+fn dict_to_context(dict: &PyDict) -> PyResult<Context> {
+    let conversation_id: String = dict.get_item("conversation_id")?
+        .and_then(|v| v.extract().ok())
+        .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Missing conversation_id"))?;
+    
+    let project_id: Option<String> = dict.get_item("project_id")
+        .and_then(|v| v.extract::<Option<String>>().ok());
+    
+    let mut context = Context::new(project_id);
+    context.conversation_id = conversation_id;
+    
+    // Deserialize messages
+    if let Some(messages) = dict.get_item("messages") {
+        if let Ok(msg_list) = messages.downcast::<pyo3::types::PyList>() {
+            for msg_item in msg_list.iter() {
+                if let Ok(msg_dict) = msg_item.downcast::<PyDict>() {
+                    let role: String = msg_dict.get_item("role")?.extract()?;
+                    let content: String = msg_dict.get_item("content")?.extract()?;
+                    let timestamp: i64 = msg_dict.get_item("timestamp")
+                        .and_then(|v| v.extract().ok())
+                        .unwrap_or(0);
+                    
+                    context.messages.push(rust_core::context::Message {
+                        role,
+                        content,
+                        timestamp,
+                    });
+                }
+            }
+        }
+    }
+    
+    Ok(context)
+}
+
+fn context_to_dict(py: Python, context: &Context) -> PyResult<PyDict> {
+    let result = PyDict::new(py);
+    result.set_item("conversation_id", &context.conversation_id)?;
+    result.set_item("project_id", context.project_id.as_ref())?;
+    
+    // Serialize messages
+    let messages: Vec<PyDict> = context.messages.iter().map(|msg| {
+        let msg_dict = PyDict::new(py);
+        msg_dict.set_item("role", &msg.role).unwrap();
+        msg_dict.set_item("content", &msg.content).unwrap();
+        msg_dict.set_item("timestamp", msg.timestamp).unwrap();
+        msg_dict
+    }).collect();
+    let messages_list = pyo3::types::PyList::new(py, messages);
+    result.set_item("messages", messages_list)?;
+    
+    // Serialize codebase context if present
+    if let Some(ref cb_ctx) = context.codebase_context {
+        let cb_dict = PyDict::new(py);
+        cb_dict.set_item("relevant_files", &cb_ctx.relevant_files)?;
+        cb_dict.set_item("semantic_matches", &cb_ctx.semantic_matches)?;
+        result.set_item("codebase_context", cb_dict)?;
+    }
+    
+    // Serialize tool history
+    let tool_history: Vec<PyDict> = context.tool_history.iter().map(|tc| {
+        let tc_dict = PyDict::new(py);
+        tc_dict.set_item("tool", &tc.tool).unwrap();
+        tc_dict.set_item("timestamp", tc.timestamp).unwrap();
+        tc_dict.set_item("request", &tc.request).unwrap();
+        tc_dict.set_item("response", &tc.response).unwrap();
+        tc_dict
+    }).collect();
+    let tool_history_list = pyo3::types::PyList::new(py, tool_history);
+    result.set_item("tool_history", tool_history_list)?;
+    
+    Ok(result)
 }

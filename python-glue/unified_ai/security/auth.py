@@ -2,7 +2,10 @@
 
 import os
 import time
+import hashlib
+import sqlite3
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional, Dict, Any
 from functools import wraps
 
@@ -49,6 +52,56 @@ def hash_password(password: str) -> str:
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against a hash"""
     return pwd_context.verify(plain_password, hashed_password)
+
+
+def hash_api_key(api_key: str) -> str:
+    """Hash an API key using SHA256"""
+    return hashlib.sha256(api_key.encode()).hexdigest()
+
+
+def get_db_path() -> Path:
+    """Get database path from config"""
+    config = load_config()
+    return Path(config.storage.db_path).expanduser()
+
+
+def get_user_by_api_key(api_key: str) -> Optional[Dict[str, Any]]:
+    """Get user by API key hash from database"""
+    db_path = get_db_path()
+    
+    # Ensure database exists
+    if not db_path.exists():
+        return None
+    
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # Hash the provided API key
+        api_key_hash = hash_api_key(api_key)
+        
+        # Query users table
+        cursor.execute(
+            "SELECT id, username, email, role FROM users WHERE api_key_hash = ?",
+            (api_key_hash,)
+        )
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            return {
+                "user_id": row["id"],
+                "username": row["username"],
+                "email": row["email"],
+                "role": row["role"],
+            }
+        
+        return None
+    except sqlite3.Error:
+        # Database error or table doesn't exist (migrations not run)
+        return None
 
 
 def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
@@ -118,16 +171,21 @@ async def authenticate_api_key(
         )
     
     # Verify API key against database
-    # TODO: Implement API key lookup in database when migrations are ready
-    # For now, check against environment variable
-    valid_key = os.getenv("VALID_API_KEY")
-    if valid_key and key != valid_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API key"
-        )
+    user = get_user_by_api_key(key)
     
-    return {"user_id": "api_user", "role": "user"}
+    if user:
+        return user
+    
+    # Fallback to environment variable for backward compatibility
+    # This allows using API keys before migrations are run
+    valid_key = os.getenv("VALID_API_KEY")
+    if valid_key and key == valid_key:
+        return {"user_id": "api_user", "role": "user"}
+    
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid API key"
+    )
 
 
 async def get_current_user(

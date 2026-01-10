@@ -8,6 +8,12 @@ from typing import List, Optional, Dict, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime
 
+try:
+    from unified_ai_orchestrator.pyo3_bridge import PyContextWindowManager, PyContextCompressor
+    HAS_PYO3 = True
+except ImportError:
+    HAS_PYO3 = False
+
 
 @dataclass
 class Message:
@@ -59,6 +65,14 @@ class ContextManager:
         self.db_path = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
+        
+        # Initialize Rust-based context management components if available
+        if HAS_PYO3:
+            self.window_manager = PyContextWindowManager()
+            self.compressor = PyContextCompressor()
+        else:
+            self.window_manager = None
+            self.compressor = None
 
     def _init_db(self):
         """Initialize database tables"""
@@ -166,3 +180,105 @@ class ContextManager:
         }
         context.tool_history.append(tool_call)
         self.save_context(context)
+    
+    def compress(self, context: Context) -> Context:
+        """Compress context by removing redundancy"""
+        if self.compressor:
+            # Use Rust compressor
+            context_dict = context.to_dict()
+            compressed_dict = self.compressor.compress(context_dict)
+            return Context.from_dict(compressed_dict)
+        else:
+            # Fallback: simple Python compression
+            return self._compress_python(context)
+    
+    def manage_window(self, context: Context, model: str, reserved_tokens: Optional[int] = None) -> Context:
+        """Manage context window for a specific model"""
+        if self.window_manager:
+            # Use Rust window manager
+            context_dict = context.to_dict()
+            if reserved_tokens:
+                managed_dict = self.window_manager.manage_context_with_reserved(
+                    context_dict,
+                    model,
+                    reserved_tokens
+                )
+            else:
+                managed_dict = self.window_manager.manage_context(
+                    context_dict,
+                    model
+                )
+            return Context.from_dict(managed_dict)
+        else:
+            # Fallback: simple Python window management
+            return self._manage_window_python(context, model, reserved_tokens or 1000)
+    
+    def _compress_python(self, context: Context) -> Context:
+        """Simple Python-based compression fallback"""
+        # Remove consecutive duplicate messages
+        compressed_messages = []
+        for i, msg in enumerate(context.messages):
+            if i == 0 or msg.content != context.messages[i-1].content:
+                # Compress long messages
+                if len(msg.content) > 2000:
+                    compressed = msg.content[:1000] + "... [truncated] ..." + msg.content[-1000:]
+                    compressed_messages.append(Message(
+                        role=msg.role,
+                        content=compressed,
+                        timestamp=msg.timestamp
+                    ))
+                else:
+                    compressed_messages.append(msg)
+        
+        context.messages = compressed_messages
+        return context
+    
+    def _manage_window_python(self, context: Context, model: str, reserved_tokens: int) -> Context:
+        """Simple Python-based window management fallback"""
+        # Model context windows (approximate)
+        model_windows = {
+            "gpt-4": 8192,
+            "gpt-3.5-turbo": 4096,
+            "claude-3-5-sonnet-20241022": 200000,
+            "claude-3-opus": 200000,
+            "claude-3-sonnet": 200000,
+            "claude-3-haiku": 200000,
+        }
+        
+        window_size = model_windows.get(model, 4096)
+        available_tokens = window_size - reserved_tokens
+        
+        # Simple token estimation (4 chars ≈ 1 token)
+        total_chars = sum(len(msg.content) for msg in context.messages)
+        estimated_tokens = total_chars // 4
+        
+        if estimated_tokens <= available_tokens:
+            return context
+        
+        # Keep system messages and recent messages
+        kept_messages = []
+        token_count = 0
+        
+        # Keep all system messages
+        for msg in context.messages:
+            if msg.role == "system":
+                msg_tokens = len(msg.content) // 4
+                if token_count + msg_tokens <= available_tokens:
+                    kept_messages.append(msg)
+                    token_count += msg_tokens
+        
+        # Keep recent messages (iterate in reverse to prioritize newest)
+        for msg in reversed(context.messages):
+            if msg.role == "system":
+                continue
+            msg_tokens = len(msg.content) // 4
+            if token_count + msg_tokens <= available_tokens:
+                kept_messages.insert(len([m for m in kept_messages if m.role == "system"]), msg)
+                token_count += msg_tokens
+            else:
+                break
+        
+        # Reverse to get correct chronological order (matches Rust implementation)
+        kept_messages.reverse()
+        context.messages = kept_messages
+        return context

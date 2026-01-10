@@ -1,5 +1,6 @@
 """Migration CLI commands"""
 
+import asyncio
 from pathlib import Path
 from typing import Optional
 
@@ -105,12 +106,12 @@ def main():
         dry_run: bool = typer.Option(False, help="Dry run mode"),
     ):
         """Run migrations"""
-        asyncio.run(run_migrations(Path(db_path), target_version, dry_run))
+        run_migrations(Path(db_path), target_version, dry_run)
     
     @app.command()
     def status(db_path: str = typer.Option(..., help="Path to database file")):
         """Show migration status"""
-        asyncio.run(migration_status(Path(db_path)))
+        migration_status(Path(db_path))
     
     @app.command()
     def rollback(
@@ -118,7 +119,7 @@ def main():
         target_version: int = typer.Option(..., help="Target version"),
     ):
         """Rollback migrations"""
-        asyncio.run(rollback_migration(Path(db_path), target_version))
+        rollback_migration(Path(db_path), target_version)
     
     app()
 
