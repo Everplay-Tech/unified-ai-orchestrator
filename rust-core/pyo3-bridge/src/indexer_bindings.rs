@@ -191,6 +191,7 @@ impl PySemanticSearch {
 #[pyclass]
 pub struct PyFileWatcher {
     watcher: Arc<Mutex<FileWatcher>>,
+    runtime_handle: tokio::runtime::Handle,
 }
 
 #[pymethods]
@@ -227,6 +228,7 @@ impl PyFileWatcher {
                 
                 Ok(Self {
                     watcher: Arc::new(Mutex::new(watcher)),
+                    runtime: std::sync::Mutex::new(rt),
                 })
             })
         })
@@ -235,14 +237,10 @@ impl PyFileWatcher {
     fn watch(&self, py: Python, path: String) -> PyResult<()> {
         let watcher = self.watcher.clone();
         let path_buf = PathBuf::from(path);
+        let handle = self.runtime_handle.clone();
         
         py.allow_threads(|| {
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    format!("Failed to create runtime: {}", e)
-                ))?;
-            
-            rt.block_on(async {
+            handle.block_on(async {
                 let mut w = watcher.lock().await;
                 w.watch(path_buf)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
@@ -257,11 +255,7 @@ impl PyFileWatcher {
         
         // Start processing events in background
         py.allow_threads(|| {
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    format!("Failed to create runtime: {}", e)
-                ))?;
-            
+            let rt = self.runtime.lock().unwrap();
             rt.spawn(async move {
                 let mut w = watcher.lock().await;
                 if let Err(e) = w.process_events().await {
@@ -277,11 +271,7 @@ impl PyFileWatcher {
         let watcher = self.watcher.clone();
         
         py.allow_threads(|| {
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    format!("Failed to create runtime: {}", e)
-                ))?;
-            
+            let rt = self.runtime.lock().unwrap();
             rt.block_on(async {
                 let mut w = watcher.lock().await;
                 w.stop()

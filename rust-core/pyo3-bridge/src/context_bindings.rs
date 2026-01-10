@@ -245,6 +245,52 @@ fn dict_to_context(dict: &PyDict) -> PyResult<Context> {
         }
     }
     
+    // Deserialize codebase context if present
+    if let Some(cb_dict) = dict.get_item("codebase_context") {
+        if let Ok(cb_dict) = cb_dict.downcast::<PyDict>() {
+            let relevant_files: Vec<String> = cb_dict.get_item("relevant_files")
+                .and_then(|v| v.extract().ok())
+                .unwrap_or_default();
+            let semantic_matches: Vec<String> = cb_dict.get_item("semantic_matches")
+                .and_then(|v| v.extract().ok())
+                .unwrap_or_default();
+            
+            context.codebase_context = Some(rust_core::context::CodebaseContext {
+                relevant_files,
+                semantic_matches,
+            });
+        }
+    }
+    
+    // Deserialize tool history
+    if let Some(tool_history) = dict.get_item("tool_history") {
+        if let Ok(tool_history_list) = tool_history.downcast::<pyo3::types::PyList>() {
+            for tc_item in tool_history_list.iter() {
+                if let Ok(tc_dict) = tc_item.downcast::<PyDict>() {
+                    let tool: String = tc_dict.get_item("tool")
+                        .and_then(|v| v.extract().ok())
+                        .unwrap_or_default();
+                    let timestamp: i64 = tc_dict.get_item("timestamp")
+                        .and_then(|v| v.extract().ok())
+                        .unwrap_or(0);
+                    let request: String = tc_dict.get_item("request")
+                        .and_then(|v| v.extract().ok())
+                        .unwrap_or_default();
+                    let response: String = tc_dict.get_item("response")
+                        .and_then(|v| v.extract().ok())
+                        .unwrap_or_default();
+                    
+                    context.tool_history.push(rust_core::context::ToolCall {
+                        tool,
+                        timestamp,
+                        request,
+                        response,
+                    });
+                }
+            }
+        }
+    }
+    
     Ok(context)
 }
 

@@ -5,12 +5,10 @@ use std::collections::HashMap;
 use std::path::Path;
 
 // Import tree-sitter language grammars
-extern "C" {
-    fn tree_sitter_python() -> Language;
-    fn tree_sitter_rust() -> Language;
-    fn tree_sitter_javascript() -> Language;
-    fn tree_sitter_typescript() -> Language;
-}
+use tree_sitter_python;
+use tree_sitter_rust;
+use tree_sitter_javascript;
+use tree_sitter_typescript;
 
 #[derive(Debug, Clone)]
 pub struct CodeBlock {
@@ -67,30 +65,28 @@ impl ASTParser {
             .or_insert_with(|| {
                 // Try to initialize parser for this language
                 let mut p = Parser::new();
-                unsafe {
-                    match language {
-                        "python" => {
-                            if p.set_language(tree_sitter_python()).is_ok() {
-                                return p;
-                            }
+                match language {
+                    "python" => {
+                        if p.set_language(tree_sitter_python::language()).is_ok() {
+                            return p;
                         }
-                        "rust" => {
-                            if p.set_language(tree_sitter_rust()).is_ok() {
-                                return p;
-                            }
-                        }
-                        "javascript" => {
-                            if p.set_language(tree_sitter_javascript()).is_ok() {
-                                return p;
-                            }
-                        }
-                        "typescript" => {
-                            if p.set_language(tree_sitter_typescript()).is_ok() {
-                                return p;
-                            }
-                        }
-                        _ => {}
                     }
+                    "rust" => {
+                        if p.set_language(tree_sitter_rust::language()).is_ok() {
+                            return p;
+                        }
+                    }
+                    "javascript" => {
+                        if p.set_language(tree_sitter_javascript::language()).is_ok() {
+                            return p;
+                        }
+                    }
+                    "typescript" => {
+                        if p.set_language(tree_sitter_typescript::language()).is_ok() {
+                            return p;
+                        }
+                    }
+                    _ => {}
                 }
                 // Return uninitialized parser if language not supported
                 p
