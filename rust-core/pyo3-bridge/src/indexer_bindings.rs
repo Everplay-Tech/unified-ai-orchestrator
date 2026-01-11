@@ -8,7 +8,11 @@ use rust_core::indexer::watcher::FileWatcher;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::mpsc;
+use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 #[pyclass]
 pub struct PyCodebaseIndexer {
@@ -184,6 +188,8 @@ impl PySemanticSearch {
 pub struct PyFileWatcher {
     watcher: Arc<Mutex<FileWatcher>>,
     runtime: std::sync::Mutex<tokio::runtime::Runtime>,
+    handle: Arc<std::sync::Mutex<Option<JoinHandle<Result<(), String>>>>>,
+    shutdown: Arc<AtomicBool>,
 }
 
 #[pymethods]
@@ -218,9 +224,13 @@ impl PyFileWatcher {
                         format!("Failed to create watcher: {}", e)
                     ))?;
                 
+                let shutdown = watcher.shutdown_signal();
+                
                 Ok(Self {
                     watcher: Arc::new(Mutex::new(watcher)),
                     runtime: std::sync::Mutex::new(rt),
+                    handle: Arc::new(std::sync::Mutex::new(None)),
+                    shutdown,
                 })
             })
         })
@@ -229,6 +239,18 @@ impl PyFileWatcher {
     fn watch(&self, py: Python, path: String) -> PyResult<()> {
         let watcher = self.watcher.clone();
         let path_buf = PathBuf::from(path);
+        
+        // Check if watcher is already running
+        let is_running = {
+            let handle_guard = self.handle.lock().unwrap();
+            handle_guard.is_some()
+        };
+        
+        if is_running {
+            return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "Cannot call watch() after start(). Call watch() for all paths before start()."
+            ));
+        }
         
         py.allow_threads(|| {
             let rt = self.runtime.lock().unwrap();
@@ -242,26 +264,71 @@ impl PyFileWatcher {
         })
     }
     
-    fn start(&self, py: Python) -> PyResult<()> {
+    fn start(&self, py: Python, error_callback: Option<PyObject>) -> PyResult<()> {
+        // Check if already running
+        {
+            let handle_guard = self.handle.lock().unwrap();
+            if handle_guard.is_some() {
+                return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    "File watcher is already running"
+                ));
+            }
+        }
+        
         let watcher = self.watcher.clone();
+        let shutdown = self.shutdown.clone();
+        let handle = self.handle.clone();
+        
+        // Clone callback before moving into async closure
+        let callback_clone = error_callback.clone();
+        
+        // Reset shutdown flag
+        shutdown.store(false, std::sync::atomic::Ordering::Relaxed);
         
         // Start processing events in background
         py.allow_threads(|| {
             let rt = self.runtime.lock().unwrap();
-            rt.spawn(async move {
-                let mut w = watcher.lock().await;
-                if let Err(e) = w.process_events().await {
-                    eprintln!("File watcher error: {}", e);
+            let handle_clone = handle.clone();
+            
+            let join_handle = rt.spawn(async move {
+                // Call process_events() - it will handle the event loop
+                // Note: This holds the lock for the duration, which means watch() 
+                // cannot be called after start(). This is a known limitation.
+                // To watch multiple paths, call watch() for all paths before start().
+                let result = {
+                    let mut w = watcher.lock().await;
+                    w.process_events().await
+                };
+                
+                // Call error callback if there was an error and callback is provided
+                if let Err(ref e) = result {
+                    if let Some(ref callback) = callback_clone {
+                        Python::with_gil(|py| {
+                            if let Err(cb_err) = callback.call1(py, (e.clone(),)) {
+                                eprintln!("Error calling error callback: {:?}", cb_err);
+                            }
+                        });
+                    } else {
+                        eprintln!("File watcher error: {}", e);
+                    }
                 }
+                
+                result
             });
+            
+            // Store the handle
+            *handle_clone.lock().unwrap() = Some(join_handle);
             
             Ok(())
         })
     }
     
     fn stop(&self, py: Python) -> PyResult<()> {
-        let watcher = self.watcher.clone();
+        // Signal shutdown
+        self.shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
         
+        // Stop the watcher
+        let watcher = self.watcher.clone();
         py.allow_threads(|| {
             let rt = self.runtime.lock().unwrap();
             rt.block_on(async {
@@ -271,6 +338,26 @@ impl PyFileWatcher {
                         format!("Failed to stop watcher: {}", e)
                     ))
             })
-        })
+        })?;
+        
+        // Wait for the background task to complete
+        // Extract the join handle first
+        let join_handle = {
+            let mut handle_guard = self.handle.lock().unwrap();
+            handle_guard.take()
+        };
+        
+        if let Some(join_handle) = join_handle {
+            py.allow_threads(|| {
+                let rt = self.runtime.lock().unwrap();
+                rt.block_on(async {
+                    if let Err(e) = join_handle.await {
+                        eprintln!("Error joining watcher task: {:?}", e);
+                    }
+                });
+            });
+        }
+        
+        Ok(())
     }
 }

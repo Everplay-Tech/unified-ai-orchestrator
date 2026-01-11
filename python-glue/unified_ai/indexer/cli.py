@@ -1,7 +1,11 @@
 """Indexing CLI commands"""
 
 import typer
+import signal
+import sys
+import threading
 from pathlib import Path
+from typing import Optional
 from .manager import IndexerManager
 
 app = typer.Typer()
@@ -42,8 +46,47 @@ def watch(
 ):
     """Watch directory for changes and auto-index"""
     manager = IndexerManager(project_id, Path(db_path))
-    typer.echo(f"Watching {path} for changes...")
-    manager.watch_directory(Path(path))
+    
+    # Thread-safe shutdown flag (signal handlers should only set flags)
+    shutdown_event = threading.Event()
+    
+    # Setup signal handlers for graceful shutdown
+    # Signal handlers should only set flags, not call complex operations
+    def signal_handler(signum, frame):
+        """Signal handler - only sets a flag, no complex operations"""
+        shutdown_event.set()
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    # Error callback for file processing errors
+    def error_callback(error_msg: str):
+        typer.echo(f"Error processing file change: {error_msg}", err=True)
+    
+    typer.echo(f"Watching {path} for changes... (Press Ctrl+C to stop)")
+    
+    try:
+        manager.watch_directory(Path(path), error_callback=error_callback)
+        
+        # Keep the process alive, checking shutdown flag periodically
+        # This allows cleanup to happen in the main thread, not in signal handler
+        try:
+            while not shutdown_event.is_set():
+                # Wait with timeout to periodically check shutdown flag
+                shutdown_event.wait(timeout=1.0)
+        except KeyboardInterrupt:
+            shutdown_event.set()
+        
+        # Cleanup happens here in main thread (safe)
+        if shutdown_event.is_set():
+            typer.echo("\nShutting down file watcher...")
+            
+    except RuntimeError as e:
+        typer.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    finally:
+        # Cleanup in main thread - safe to call complex operations here
+        manager.stop_watching()
 
 
 @app.command()

@@ -2,7 +2,8 @@
 
 use notify::{Watcher, RecursiveMode, Event, EventKind};
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use crate::indexer::codebase::CodebaseIndexer;
 
@@ -11,6 +12,7 @@ pub struct FileWatcher {
     receiver: mpsc::Receiver<Result<Event, notify::Error>>,
     indexer: CodebaseIndexer,
     debounce_duration: Duration,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl FileWatcher {
@@ -26,7 +28,12 @@ impl FileWatcher {
             receiver: rx,
             indexer,
             debounce_duration: Duration::from_millis(500),
+            shutdown: Arc::new(AtomicBool::new(false)),
         })
+    }
+    
+    pub fn shutdown_signal(&self) -> Arc<AtomicBool> {
+        self.shutdown.clone()
     }
     
     pub fn watch(&mut self, path: PathBuf) -> Result<(), notify::Error> {
@@ -40,7 +47,12 @@ impl FileWatcher {
         let mut last_event_time = std::time::Instant::now();
         
         loop {
-            // Check for events with timeout
+            // Check for shutdown signal (no lock needed for atomic read)
+            if self.shutdown.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+            
+            // Check for events with timeout (receiver doesn't need mutex)
             match self.receiver.try_recv() {
                 Ok(Ok(event)) => {
                     pending_events.push(event);
@@ -52,6 +64,7 @@ impl FileWatcher {
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     // If we have pending events and enough time has passed, process them
+                    // Only hold the lock during actual processing
                     if !pending_events.is_empty() 
                         && last_event_time.elapsed() >= self.debounce_duration 
                     {
@@ -61,7 +74,7 @@ impl FileWatcher {
                         }
                     }
                     
-                    // Small sleep to avoid busy waiting
+                    // Small sleep to avoid busy waiting (lock is released here)
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -73,6 +86,8 @@ impl FileWatcher {
     
     /// Stop watching (cleanup)
     pub fn stop(&mut self) -> Result<(), notify::Error> {
+        // Signal shutdown
+        self.shutdown.store(true, Ordering::Relaxed);
         // Watcher will be dropped, which stops watching
         Ok(())
     }

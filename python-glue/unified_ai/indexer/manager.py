@@ -1,13 +1,14 @@
 """Indexer manager for Python interface"""
 
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable
 
 try:
-    from unified_ai_orchestrator.pyo3_bridge import PyCodebaseIndexer, PySemanticSearch
+    from unified_ai_orchestrator.pyo3_bridge import PyCodebaseIndexer, PySemanticSearch, PyFileWatcher
     HAS_PYO3 = True
 except ImportError:
     HAS_PYO3 = False
+    PyFileWatcher = None
 
 
 class IndexerManager:
@@ -23,6 +24,9 @@ class IndexerManager:
         else:
             self.indexer = None
             self.search_engine = None
+        
+        self._watcher: Optional[PyFileWatcher] = None
+        self._watcher_started: bool = False
     
     def index_directory(self, root_path: Path) -> int:
         """Index a directory recursively"""
@@ -95,12 +99,34 @@ class IndexerManager:
             print("PyO3 bindings not available - repair not supported")
             return 0
     
-    def watch_directory(self, path: Path) -> None:
+    def watch_directory(self, path: Path, error_callback: Optional[Callable[[str], None]] = None) -> None:
         """Start watching a directory for changes"""
-        # File watcher implementation would require additional setup
-        # For now, this is a placeholder
-        print(f"File watching not yet implemented - would watch {path}")
+        if not HAS_PYO3:
+            raise RuntimeError("PyO3 bindings not available - file watching not supported")
+        
+        if self._watcher is None:
+            self._watcher = PyFileWatcher(self.project_id, str(self.db_path))
+        
+        # Register the path to watch
+        self._watcher.watch(str(path))
+        
+        # Only start the watcher once, after paths are registered
+        if not self._watcher_started:
+            self._watcher.start(error_callback)
+            self._watcher_started = True
     
     def stop_watching(self) -> None:
         """Stop watching for changes"""
-        print("File watching not yet implemented")
+        if self._watcher is not None:
+            self._watcher.stop()
+            self._watcher = None
+            self._watcher_started = False
+    
+    def __enter__(self):
+        """Context manager entry"""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - stop watching if active"""
+        self.stop_watching()
+        return False
