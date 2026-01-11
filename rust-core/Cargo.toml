@@ -39,3 +39,8 @@ tantivy.workspace = true
 sqlx-migrate.workspace = true
 ring.workspace = true
 chrono.workspace = true
+ort.workspace = true
+
+[features]
+default = []
+onnx-embeddings = ["ort"]

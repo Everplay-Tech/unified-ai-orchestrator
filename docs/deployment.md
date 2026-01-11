@@ -56,14 +56,60 @@ WantedBy=multi-user.target
 
 ### Security Checklist
 
-- [ ] Set strong `JWT_SECRET_KEY`
-- [ ] Set `ENCRYPTION_KEY`
-- [ ] Configure CORS origins
-- [ ] Enable HTTPS
-- [ ] Set up firewall rules
-- [ ] Configure rate limiting
-- [ ] Set up monitoring
-- [ ] Enable audit logging
+#### Authentication & Authorization
+- [ ] Set strong `JWT_SECRET_KEY` (minimum 32 characters, random)
+- [ ] Set `ENCRYPTION_KEY` (32 bytes for AES-256)
+- [ ] Configure API key authentication (`MOBILE_API_KEY`)
+- [ ] Set `api_key_required = true` in production config
+- [ ] Review and configure user roles and permissions
+
+#### Network Security
+- [ ] Configure CORS origins (remove wildcard `*` in production)
+- [ ] Enable HTTPS with valid SSL certificates
+- [ ] Set up reverse proxy (nginx/traefik) for SSL termination
+- [ ] Configure firewall rules (only allow necessary ports)
+- [ ] Use VPN or private network for internal access
+
+#### Rate Limiting & Input Validation
+- [ ] Configure rate limits per user/API key
+- [ ] Enable input validation (`enable_sql_injection_protection = true`)
+- [ ] Set appropriate `max_input_length` limits
+- [ ] Test rate limiting under load
+
+#### Security Headers & CSRF
+- [ ] Enable security headers (`enable_security_headers = true`)
+- [ ] Enable CSRF protection (`enable_csrf_protection = true`)
+- [ ] Configure HSTS for HTTPS (`enable_hsts = true`)
+- [ ] Review Content Security Policy settings
+
+#### Audit & Monitoring
+- [ ] Enable audit logging (`audit_logging_enabled = true`)
+- [ ] Configure audit log retention (`audit_retention_days`)
+- [ ] Set up log monitoring and alerting
+- [ ] Monitor for suspicious activity patterns
+- [ ] Set up Prometheus metrics collection
+
+#### Database Security
+- [ ] Use strong database passwords (PostgreSQL)
+- [ ] Encrypt database at rest
+- [ ] Restrict database network access
+- [ ] Regular database backups
+- [ ] Review database migration security
+
+#### Secrets Management
+- [ ] Store API keys in secure keyring (not config files)
+- [ ] Use environment variables for sensitive config
+- [ ] Rotate API keys regularly
+- [ ] Never commit secrets to version control
+- [ ] Use secrets management service in production (AWS Secrets Manager, HashiCorp Vault)
+
+#### Production Hardening
+- [ ] Run service as non-root user
+- [ ] Set appropriate file permissions
+- [ ] Disable unnecessary features
+- [ ] Keep dependencies updated
+- [ ] Regular security audits
+- [ ] Penetration testing
 
 ### Monitoring
 
@@ -96,8 +142,48 @@ The system includes a mobile web interface for remote access. See [Mobile Access
 For production mobile access:
 
 - **Use HTTPS**: Set up reverse proxy with SSL certificates
-- **Restrict Origins**: Configure `allowed_origins` in config file
+- **Restrict Origins**: Configure `allowed_origins` in config file (remove `*`)
 - **API Key Authentication**: Required for all mobile requests
+- **Rate Limiting**: Configure per-API-key rate limits
+- **Input Validation**: All inputs are validated and sanitized
+- **Audit Logging**: All mobile access is logged
+
+### Security Best Practices
+
+#### API Key Management
+1. Generate strong API keys (minimum 32 characters)
+2. Store keys securely (use keyring, not config files)
+3. Rotate keys regularly (every 90 days)
+4. Use different keys for different environments
+5. Revoke compromised keys immediately
+
+#### JWT Token Security
+1. Use strong secret keys (minimum 32 characters)
+2. Set appropriate token expiration times
+3. Implement token refresh mechanism
+4. Validate tokens on every request
+5. Store tokens securely on client side
+
+#### Input Validation
+- All user inputs are validated and sanitized
+- SQL injection protection enabled by default
+- XSS protection via HTML sanitization
+- Path traversal prevention for file operations
+- Maximum length limits enforced
+
+#### Rate Limiting
+- Per-API-key rate limiting
+- Per-IP rate limiting (fallback)
+- Configurable limits per endpoint
+- Rate limit headers in responses
+- Graceful degradation on limit exceeded
+
+#### Audit Logging
+- All authentication events logged
+- All resource access logged
+- Failed authentication attempts logged
+- Suspicious activity patterns detected
+- Log retention configurable (default 90 days)
 - **Rate Limiting**: Configured per API key (default: 60 req/min)
 - **VPN Recommended**: Use VPN instead of direct port forwarding for better security
 

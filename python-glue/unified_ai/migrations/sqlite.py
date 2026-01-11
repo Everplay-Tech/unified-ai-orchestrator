@@ -130,3 +130,82 @@ class SQLiteMigrationRunner:
             (m["version"], m["name"], m["version"] in applied)
             for m in self.migrations
         ]
+    
+    def validate_migrations(self) -> List[str]:
+        """Validate migrations for conflicts and issues"""
+        errors = []
+        
+        # Check for duplicate versions
+        versions = [m["version"] for m in self.migrations]
+        seen_versions = set()
+        for version in versions:
+            if version in seen_versions:
+                errors.append(f"Duplicate migration version: {version}")
+            seen_versions.add(version)
+        
+        # Check for gaps in versions
+        if versions:
+            sorted_versions = sorted(versions)
+            for i in range(len(sorted_versions) - 1):
+                if sorted_versions[i + 1] != sorted_versions[i] + 1:
+                    errors.append(
+                        f"Gap in migration versions: {sorted_versions[i]} -> {sorted_versions[i + 1]}"
+                    )
+        
+        # Check for empty SQL
+        for migration in self.migrations:
+            if not migration["up_sql"] or not migration["up_sql"].strip():
+                errors.append(f"Migration {migration['version']} has empty up_sql")
+            if not migration["down_sql"] or not migration["down_sql"].strip():
+                errors.append(f"Migration {migration['version']} has empty down_sql")
+        
+        return errors
+    
+    async def validate_sql_syntax(self, sql: str) -> tuple[bool, Optional[str]]:
+        """Validate SQL syntax (basic check)"""
+        # Basic SQL syntax validation
+        sql_upper = sql.upper().strip()
+        
+        # Check for basic SQL keywords
+        if not any(keyword in sql_upper for keyword in ["CREATE", "ALTER", "DROP", "INSERT", "UPDATE", "DELETE", "SELECT"]):
+            return False, "SQL does not contain valid SQL statements"
+        
+        # Check for balanced parentheses
+        if sql.count('(') != sql.count(')'):
+            return False, "Unbalanced parentheses in SQL"
+        
+        # Check for balanced quotes
+        single_quotes = sql.count("'") % 2
+        double_quotes = sql.count('"') % 2
+        if single_quotes != 0 or double_quotes != 0:
+            return False, "Unbalanced quotes in SQL"
+        
+        return True, None
+    
+    async def validate_migration_state(self) -> tuple[bool, List[str]]:
+        """Validate database state matches migration history"""
+        errors = []
+        await self.ensure_migrations_table()
+        
+        applied = await self.get_applied_migrations()
+        current_version = await self.get_current_version()
+        
+        # Check that applied migrations match registered migrations
+        for version, name in applied.items():
+            migration = next((m for m in self.migrations if m["version"] == version), None)
+            if not migration:
+                errors.append(f"Applied migration {version}:{name} not found in registered migrations")
+            elif migration["name"] != name:
+                errors.append(
+                    f"Migration {version} name mismatch: applied '{name}' vs registered '{migration['name']}'"
+                )
+        
+        # Check for missing migrations
+        for migration in self.migrations:
+            if migration["version"] <= (current_version or 0):
+                if migration["version"] not in applied:
+                    errors.append(
+                        f"Migration {migration['version']}:{migration['name']} should be applied but is missing"
+                    )
+        
+        return len(errors) == 0, errors

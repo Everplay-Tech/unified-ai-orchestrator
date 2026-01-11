@@ -46,5 +46,44 @@ def watch(
     manager.watch_directory(Path(path))
 
 
+@app.command()
+def incremental(
+    project_id: str = typer.Argument(..., help="Project ID"),
+    path: str = typer.Argument(..., help="Path to index"),
+    db_path: str = typer.Option("data/index.db", help="Database path"),
+):
+    """Incremental indexing - only index changed files"""
+    manager = IndexerManager(project_id, Path(db_path))
+    indexed = manager.index_incremental(Path(path))
+    typer.echo(f"Indexed {indexed} changed files")
+
+
+@app.command()
+def validate(
+    project_id: str = typer.Argument(..., help="Project ID"),
+    db_path: str = typer.Option("data/index.db", help="Database path"),
+):
+    """Validate index integrity"""
+    manager = IndexerManager(project_id, Path(db_path))
+    result = manager.validate_index()
+    typer.echo(f"Validation complete:")
+    typer.echo(f"  Total files: {result.get('total_files', 0)}")
+    typer.echo(f"  Total blocks: {result.get('total_blocks', 0)}")
+    typer.echo(f"  Orphaned blocks: {result.get('orphaned_blocks', 0)}")
+    if result.get('errors'):
+        typer.echo(f"  Errors: {len(result['errors'])}")
+
+
+@app.command()
+def repair(
+    project_id: str = typer.Argument(..., help="Project ID"),
+    db_path: str = typer.Option("data/index.db", help="Database path"),
+):
+    """Repair index (remove orphaned entries)"""
+    manager = IndexerManager(project_id, Path(db_path))
+    repaired = manager.repair_index()
+    typer.echo(f"Repaired {repaired} issues")
+
+
 if __name__ == "__main__":
     app()

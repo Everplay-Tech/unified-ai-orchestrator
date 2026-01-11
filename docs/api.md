@@ -123,8 +123,31 @@ All errors follow this format:
 ```
 
 Common status codes:
-- `400` - Bad Request
-- `401` - Unauthorized
-- `403` - Forbidden
-- `404` - Not Found
+- `400` - Bad Request (validation error, invalid input)
+- `401` - Unauthorized (missing or invalid API key/token)
+- `403` - Forbidden (insufficient permissions)
+- `404` - Not Found (resource doesn't exist)
+- `429` - Too Many Requests (rate limit exceeded)
 - `500` - Internal Server Error
+
+### Rate Limiting
+
+Rate limits are applied per API key or IP address:
+- Default: 60 requests per minute
+- Headers included in responses:
+  - `X-RateLimit-Limit`: Maximum requests per minute
+  - `X-RateLimit-Remaining`: Remaining requests in current window
+  - `Retry-After`: Seconds to wait before retrying (when rate limited)
+
+### Pagination
+
+List endpoints support pagination:
+- `limit`: Number of items per page (default: 20, max: 100)
+- `offset`: Number of items to skip (default: 0)
+
+### Filtering
+
+Some endpoints support filtering:
+- `created_after`: Filter by creation date
+- `project_id`: Filter by project
+- `tool`: Filter by AI tool used

@@ -210,7 +210,74 @@ def main():
             db_type=db_type,
         )
     
-    app()
+    @app.command()
+    def validate(
+        db_path: Optional[str] = typer.Option(None, help="Path to SQLite database file"),
+        connection_string: Optional[str] = typer.Option(None, help="PostgreSQL connection string"),
+        db_type: Optional[str] = typer.Option(None, help="Database type: sqlite or postgresql"),
+    ):
+        """Validate migrations and database state"""
+        config = load_config()
+        
+        if db_type:
+            db_type_enum = DatabaseType(db_type.lower())
+        else:
+            db_type_enum = DatabaseType(config.storage.db_type.lower())
+        
+        if db_type_enum == DatabaseType.POSTGRESQL:
+            conn_str = connection_string or config.storage.connection_string
+            if not conn_str:
+                raise ValueError("PostgreSQL requires connection_string")
+            storage = create_storage_backend(db_type_enum, connection_string=conn_str)
+        else:
+            db_path_val = db_path or Path(config.storage.db_path)
+            storage = create_storage_backend(db_type_enum, db_path=db_path_val)
+        
+        asyncio.run(_validate_migrations_async(storage))
+
+
+async def _validate_migrations_async(storage_backend) -> None:
+    """Validate migrations (async)"""
+    await storage_backend.initialize()
+    
+    if isinstance(storage_backend, PostgreSQLStorage):
+        runner = PostgreSQLMigrationRunner(storage_backend)
+        for migration in MIGRATIONS:
+            runner.add_migration(
+                migration["version"],
+                migration["name"],
+                migration["up_postgresql"],
+                migration["down_postgresql"],
+            )
+    elif isinstance(storage_backend, SQLiteStorage):
+        runner = SQLiteMigrationRunner(storage_backend)
+        for migration in MIGRATIONS:
+            runner.add_migration(
+                migration["version"],
+                migration["name"],
+                migration["up_sqlite"],
+                migration["down_sqlite"],
+            )
+    else:
+        raise ValueError(f"Unsupported storage backend: {type(storage_backend)}")
+    
+    # Validate migrations
+    errors = runner.validate_migrations()
+    if errors:
+        typer.echo("Migration validation errors:", err=True)
+        for error in errors:
+            typer.echo(f"  - {error}", err=True)
+        raise typer.Exit(1)
+    
+    # Validate database state
+    is_valid, state_errors = await runner.validate_migration_state()
+    if not is_valid:
+        typer.echo("Database state validation errors:", err=True)
+        for error in state_errors:
+            typer.echo(f"  - {error}", err=True)
+        raise typer.Exit(1)
+    
+    typer.echo("All migrations validated successfully")
 
 
 if __name__ == "__main__":

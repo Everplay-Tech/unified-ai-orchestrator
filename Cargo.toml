@@ -44,3 +44,5 @@ sqlx-migrate = "0.1"
 ring = "0.17"
 chrono = { version = "0.4", features = ["serde"] }
 md5 = "0.7"
+# Embeddings (optional)
+ort = { version = "2.0", optional = true }

@@ -87,7 +87,13 @@ impl FileWatcher {
                 EventKind::Create(_) | EventKind::Modify(_) => {
                     for path in event.paths {
                         if path.is_file() {
-                            paths_to_update.insert(path);
+                            // Only index supported languages
+                            if crate::indexer::parser::ASTParser::detect_language(&path).is_some() {
+                                paths_to_update.insert(path);
+                            }
+                        } else if path.is_dir() {
+                            // For directories, we might want to index new files
+                            // But for now, we'll skip directory creation events
                         }
                     }
                 }
@@ -110,16 +116,26 @@ impl FileWatcher {
             }
         }
         
-        // Update indexed files
+        // Update indexed files (incremental indexing)
         for path in paths_to_update {
             // Skip if file doesn't exist (might have been deleted)
             if !path.exists() {
                 continue;
             }
             
-            if let Err(e) = self.indexer.update_file(&path).await {
-                eprintln!("Failed to index {}: {}", path.display(), e);
-                // Continue processing other files
+            // Use incremental indexing to check if file needs updating
+            match self.indexer.should_index_file(&path).await {
+                Ok(true) => {
+                    if let Err(e) = self.indexer.update_file(&path).await {
+                        eprintln!("Failed to index {}: {}", path.display(), e);
+                    }
+                }
+                Ok(false) => {
+                    // File hasn't changed, skip
+                }
+                Err(e) => {
+                    eprintln!("Error checking if {} should be indexed: {}", path.display(), e);
+                }
             }
         }
         

@@ -39,6 +39,13 @@ pub fn register_migrations(runner: &mut MigrationRunner) {
         up: Box::new(|pool| Box::pin(m004_add_security::up(pool))),
         down: Box::new(|pool| Box::pin(m004_add_security::down(pool))),
     });
+    
+    runner.add_migration(Migration {
+        version: 5,
+        name: "add_codeblock_metadata".to_string(),
+        up: Box::new(|pool| Box::pin(m005_add_codeblock_metadata::up(pool))),
+        down: Box::new(|pool| Box::pin(m005_add_codeblock_metadata::down(pool))),
+    });
 }
 
 mod migrations {
@@ -377,6 +384,34 @@ mod migrations {
                 .execute(pool)
                 .await?;
             
+            Ok(())
+        }
+    }
+    
+    pub mod m005_add_codeblock_metadata {
+        use sqlx::sqlite::SqlitePool;
+        pub async fn up(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+            // Add docstring column (nullable)
+            sqlx::query(
+                "ALTER TABLE code_blocks ADD COLUMN docstring TEXT"
+            )
+            .execute(pool)
+            .await?;
+            
+            // Add decorators column (nullable, stores JSON array)
+            sqlx::query(
+                "ALTER TABLE code_blocks ADD COLUMN decorators TEXT"
+            )
+            .execute(pool)
+            .await?;
+            
+            Ok(())
+        }
+        
+        pub async fn down(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+            // SQLite doesn't support DROP COLUMN directly, so we need to recreate the table
+            // For now, we'll just note that rollback requires manual intervention
+            // In production, you'd use a more sophisticated migration strategy
             Ok(())
         }
     }

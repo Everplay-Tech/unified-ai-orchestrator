@@ -294,10 +294,23 @@ async def get_conversation(
     audit_logger: AuditLogger = Depends(get_audit_logger),
 ):
     """Get conversation history"""
+    from ..security.authorization import check_resource_access
+    
     context = await context_mgr.get_context(conversation_id)
     
     if not context:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # Check authorization
+    has_access = await check_resource_access(
+        user=user,
+        resource_type="conversation",
+        resource_id=conversation_id,
+        action="read"
+    )
+    
+    if not has_access:
+        raise HTTPException(status_code=403, detail="Access denied to this conversation")
     
     # Log audit event (fire and forget)
     import asyncio

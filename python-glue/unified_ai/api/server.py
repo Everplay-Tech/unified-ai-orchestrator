@@ -80,6 +80,9 @@ def create_app() -> FastAPI:
     from .middleware import RateLimitMiddleware
     app.add_middleware(RateLimitMiddleware, requests_per_minute=rate_limit)
     
+    # Add input validation middleware (early in stack)
+    app.add_middleware(InputValidationMiddleware)
+    
     # Add security headers middleware
     app.add_middleware(SecurityHeadersMiddleware)
     

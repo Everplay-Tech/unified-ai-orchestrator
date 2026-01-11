@@ -235,3 +235,33 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         response.headers["X-RateLimit-Remaining"] = str(limiter.remaining())
         
         return response
+
+
+class InputValidationMiddleware(BaseHTTPMiddleware):
+    """Input validation middleware for request sanitization"""
+    
+    async def dispatch(self, request: Request, call_next):
+        from ..security.validation import validate_input, sanitize_html, sanitize_path
+        
+        # Skip validation for certain paths
+        path = request.url.path
+        skip_paths = ["/health", "/metrics", "/static", "/docs", "/openapi.json"]
+        if any(path.startswith(skip) for skip in skip_paths):
+            return await call_next(request)
+        
+        # Validate query parameters
+        for key, value in request.query_params.items():
+            try:
+                validate_input(str(value), max_length=1000)
+            except Exception as e:
+                from fastapi.responses import Response
+                return Response(
+                    status_code=400,
+                    content=f"Invalid query parameter {key}: {str(e)}",
+                )
+        
+        # For POST/PUT requests, validate body will be handled by Pydantic models
+        # But we can add additional checks here if needed
+        
+        response = await call_next(request)
+        return response

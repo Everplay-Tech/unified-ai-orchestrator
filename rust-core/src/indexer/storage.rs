@@ -60,10 +60,13 @@ impl IndexStorage {
         
         // Insert new blocks (embeddings will be added separately if needed)
         for block in blocks {
+            // Serialize decorators as JSON
+            let decorators_json = serde_json::to_string(&block.decorators).unwrap_or_else(|_| "[]".to_string());
+            
             sqlx::query(
                 r#"
-                INSERT INTO code_blocks (file_id, block_type, name, content, start_line, end_line, embedding)
-                VALUES (?, ?, ?, ?, ?, ?, NULL)
+                INSERT INTO code_blocks (file_id, block_type, name, content, start_line, end_line, embedding, docstring, decorators)
+                VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)
                 "#,
             )
             .bind(file_id.0)
@@ -72,6 +75,8 @@ impl IndexStorage {
             .bind(&block.content)
             .bind(block.start_line as i64)
             .bind(block.end_line as i64)
+            .bind(&block.docstring)
+            .bind(&decorators_json)
             .execute(&self.pool)
             .await?;
         }
@@ -221,5 +226,26 @@ impl IndexStorage {
         };
         
         Ok(result.map(|(id,)| id))
+    }
+    
+    /// Get block details by block ID
+    pub async fn get_block_by_id(
+        &self,
+        block_id: i64,
+    ) -> Result<Option<(String, String, Option<String>, i64, i64)>> {
+        let result = sqlx::query_as::<_, (String, String, Option<String>, i64, i64)>(
+            r#"
+            SELECT f.file_path, c.block_type, c.name, c.start_line, c.end_line
+            FROM code_blocks c
+            JOIN indexed_files f ON c.file_id = f.id
+            WHERE c.id = ?
+            LIMIT 1
+            "#,
+        )
+        .bind(block_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        
+        Ok(result)
     }
 }

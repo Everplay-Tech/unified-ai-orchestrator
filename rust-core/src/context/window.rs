@@ -46,43 +46,109 @@ impl ContextWindowManager {
         total
     }
     
-    /// Truncate context to fit within window
+    /// Truncate context to fit within window with importance-based retention
     fn truncate_context(&self, context: &mut Context, model: &str, window_size: usize) {
         let available_tokens = window_size - self.reserved_tokens;
         
-        // Keep system messages and recent messages
+        // Score messages by importance
+        let mut scored_messages: Vec<(usize, f32, Message)> = context.messages
+            .iter()
+            .enumerate()
+            .map(|(idx, msg)| {
+                let importance = self.score_message_importance(msg, idx, context.messages.len());
+                (idx, importance, msg.clone())
+            })
+            .collect();
+        
+        // Sort by importance (highest first), but preserve order for same importance
+        scored_messages.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0)) // Preserve original order for same importance
+        });
+        
+        // Keep messages that fit, prioritizing importance
         let mut kept_messages = Vec::new();
         let mut token_count = 0;
+        let mut kept_indices = std::collections::HashSet::new();
         
-        // First, keep all system messages
-        for message in &context.messages {
-            if message.role == "system" {
-                let tokens = self.token_counter.estimate_tokens(&message.content) + 4;
-                if token_count + tokens <= available_tokens {
-                    kept_messages.push(message.clone());
-                    token_count += tokens;
-                }
+        // First pass: keep all system messages and high-importance messages
+        for (idx, importance, message) in &scored_messages {
+            if kept_indices.contains(idx) {
+                continue;
+            }
+            
+            let tokens = self.token_counter.estimate_tokens(&message.content) + 4;
+            
+            // Always keep system messages if possible
+            if message.role == "system" && token_count + tokens <= available_tokens {
+                kept_messages.push((*idx, message.clone()));
+                kept_indices.insert(*idx);
+                token_count += tokens;
+            }
+            // Keep high-importance messages
+            else if importance > 0.7 && token_count + tokens <= available_tokens {
+                kept_messages.push((*idx, message.clone()));
+                kept_indices.insert(*idx);
+                token_count += tokens;
             }
         }
         
-        // Then, keep recent messages (in reverse order)
-        for message in context.messages.iter().rev() {
-            if message.role == "system" {
-                continue; // Already added
+        // Second pass: fill remaining space with recent messages
+        // Iterate in reverse order (most recent first) using enumerate to get reliable indices
+        for (rev_idx, message) in context.messages.iter().rev().enumerate() {
+            // Calculate original index: if we're at position rev_idx in reversed iterator,
+            // the original index is len - 1 - rev_idx
+            let idx = context.messages.len() - 1 - rev_idx;
+            
+            if kept_indices.contains(&idx) {
+                continue;
             }
             
             let tokens = self.token_counter.estimate_tokens(&message.content) + 4;
             if token_count + tokens <= available_tokens {
-                kept_messages.insert(kept_messages.len() - kept_messages.iter().filter(|m| m.role == "system").count(), message.clone());
+                kept_messages.push((idx, message.clone()));
+                kept_indices.insert(idx);
                 token_count += tokens;
             } else {
-                break; // Can't fit more
+                break;
             }
         }
         
-        // Reverse to get correct order
-        kept_messages.reverse();
-        context.messages = kept_messages;
+        // Sort by original index to preserve order
+        kept_messages.sort_by_key(|(idx, _)| *idx);
+        context.messages = kept_messages.into_iter().map(|(_, msg)| msg).collect();
+    }
+    
+    /// Score message importance (0.0 to 1.0)
+    fn score_message_importance(&self, message: &Message, position: usize, total: usize) -> f32 {
+        let mut score = 0.5; // Base score
+        
+        // System messages are always important
+        if message.role == "system" {
+            score = 1.0;
+        }
+        
+        // Recent messages are more important
+        let recency = 1.0 - (position as f32 / total as f32);
+        score += recency * 0.3;
+        
+        // Messages with code blocks are important
+        if message.content.contains("```") {
+            score += 0.2;
+        }
+        
+        // Messages with keywords indicating importance
+        let content_lower = message.content.to_lowercase();
+        let important_keywords = ["error", "bug", "fix", "important", "decided", "decision", "todo", "fixme"];
+        for keyword in important_keywords {
+            if content_lower.contains(keyword) {
+                score += 0.1;
+                break;
+            }
+        }
+        
+        // Cap at 1.0
+        score.min(1.0)
     }
 }
 

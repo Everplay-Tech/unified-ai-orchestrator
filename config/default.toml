@@ -29,3 +29,47 @@ index_depth = 3
 enable_mobile = true
 allowed_origins = ["*"]
 rate_limit_per_minute = 60
+api_key = ""  # Mobile API key (set via environment variable MOBILE_API_KEY)
+
+[security]
+# JWT settings
+jwt_secret_key = ""  # Set via JWT_SECRET_KEY environment variable
+jwt_algorithm = "HS256"
+access_token_expire_minutes = 30
+refresh_token_expire_days = 7
+
+# Encryption
+encryption_key = ""  # Set via ENCRYPTION_KEY environment variable
+encryption_algorithm = "AES-256-GCM"
+
+# Rate limiting
+rate_limit_enabled = true
+rate_limit_per_minute = 60
+rate_limit_per_hour = 1000
+
+# Input validation
+max_input_length = 100000
+max_query_param_length = 1000
+enable_sql_injection_protection = true
+enable_xss_protection = true
+
+# CORS
+cors_enabled = true
+cors_allow_credentials = true
+cors_max_age = 3600
+
+# Security headers
+enable_security_headers = true
+enable_csrf_protection = true
+enable_hsts = true
+hsts_max_age = 31536000
+
+# Audit logging
+audit_logging_enabled = true
+audit_log_file = "~/.uai/audit.log"
+audit_retention_days = 90
+
+# API key authentication
+api_key_required = false  # Set to true in production
+api_key_header = "X-API-Key"
+api_key_query_param = "api_key"  # Less secure, use header preferred

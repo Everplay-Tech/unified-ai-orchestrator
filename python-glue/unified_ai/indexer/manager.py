@@ -58,6 +58,43 @@ class IndexerManager:
             print("PyO3 bindings not available - search not supported")
             return []
     
+    def index_incremental(self, root_path: Path) -> int:
+        """Incremental indexing - only index changed files"""
+        if HAS_PYO3 and self.indexer:
+            return self.indexer.index_incremental(str(root_path))
+        else:
+            print("PyO3 bindings not available - incremental indexing not supported")
+            return 0
+    
+    def validate_index(self) -> Dict[str, Any]:
+        """Validate index integrity"""
+        if HAS_PYO3 and self.indexer:
+            result = self.indexer.validate_index()
+            return {
+                "total_files": result.get("total_files", 0),
+                "total_blocks": result.get("total_blocks", 0),
+                "orphaned_blocks": result.get("orphaned_blocks", 0),
+                "missing_files": result.get("missing_files", []),
+                "errors": result.get("errors", []),
+            }
+        else:
+            print("PyO3 bindings not available - validation not supported")
+            return {
+                "total_files": 0,
+                "total_blocks": 0,
+                "orphaned_blocks": 0,
+                "missing_files": [],
+                "errors": [],
+            }
+    
+    def repair_index(self) -> int:
+        """Repair index (remove orphaned entries)"""
+        if HAS_PYO3 and self.indexer:
+            return self.indexer.repair_index()
+        else:
+            print("PyO3 bindings not available - repair not supported")
+            return 0
+    
     def watch_directory(self, path: Path) -> None:
         """Start watching a directory for changes"""
         # File watcher implementation would require additional setup

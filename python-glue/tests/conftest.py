@@ -2,10 +2,14 @@
 
 import pytest
 import tempfile
+import asyncio
 from pathlib import Path
 from unified_ai.config import Config, ToolConfig
 from unified_ai.context_manager import ContextManager
 from unified_ai.cost import CostTracker
+
+# Configure pytest-asyncio to use auto mode
+pytest_plugins = ("pytest_asyncio",)
 
 
 @pytest.fixture
@@ -31,9 +35,21 @@ def test_config():
 
 
 @pytest.fixture
-def context_manager(temp_db_path):
+@pytest.mark.asyncio
+async def context_manager(temp_db_path):
     """Context manager fixture"""
-    return ContextManager(temp_db_path)
+    from unified_ai.storage import create_storage_backend, DatabaseType
+    
+    # Create storage backend from temp_db_path
+    storage = create_storage_backend(DatabaseType.SQLITE, db_path=temp_db_path)
+    await storage.initialize()
+    
+    # Create context manager with storage backend
+    manager = ContextManager(storage_backend=storage)
+    await manager.initialize()
+    yield manager
+    await manager.close()
+    await storage.close()
 
 
 @pytest.fixture

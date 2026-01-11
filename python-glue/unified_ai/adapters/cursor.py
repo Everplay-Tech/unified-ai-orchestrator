@@ -70,8 +70,20 @@ class CursorAdapter(ToolAdapter):
             # Try a simple endpoint (may not exist)
             response = await client.get("/health", timeout=2.0)
             return response.status_code == 200
-        except Exception:
+        except Exception as e:
             # If no API key and can't connect, assume unavailable
+            import logging
+            logging.getLogger(__name__).debug(f"Cursor adapter unavailable: {e}")
+            return False
+    
+    async def health_check(self) -> bool:
+        """Perform health check on Cursor instance"""
+        try:
+            client = await self._get_client()
+            # Try health endpoint
+            response = await client.get("/health", timeout=2.0)
+            return response.status_code == 200
+        except Exception:
             return False
     
     async def chat(
@@ -96,19 +108,28 @@ class CursorAdapter(ToolAdapter):
                 "semantic_matches": context.codebase_context.get("semantic_matches", []),
             }
         
-        response = await client.post("/v1/chat", json=payload)
-        response.raise_for_status()
-        
-        data = response.json()
-        
-        return Response(
-            content=data.get("content", ""),
-            tool=self.name,
-            metadata={
-                "model": data.get("model", "cursor"),
-                "usage": data.get("usage", {}),
-            },
-        )
+        try:
+            response = await client.post("/v1/chat", json=payload, timeout=120.0)
+            response.raise_for_status()
+            
+            data = response.json()
+            
+            return Response(
+                content=data.get("content", ""),
+                tool=self.name,
+                metadata={
+                    "model": data.get("model", "cursor"),
+                    "usage": data.get("usage", {}),
+                },
+            )
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise ValueError("Cursor API endpoint not found. Cursor may not have a public API yet.")
+            raise
+        except httpx.TimeoutException:
+            raise TimeoutError("Cursor API request timed out")
+        except Exception as e:
+            raise RuntimeError(f"Cursor API error: {str(e)}")
     
     async def stream_chat(
         self,
@@ -129,13 +150,26 @@ class CursorAdapter(ToolAdapter):
         if context and context.codebase_context:
             payload["codebase_context"] = context.codebase_context
         
-        async with client.stream("POST", "/v1/chat", json=payload) as response:
-            response.raise_for_status()
-            async for line in response.aiter_lines():
-                if line.startswith("data: "):
-                    data = json.loads(line[6:])
-                    if "content" in data:
-                        yield data["content"]
+        try:
+            async with client.stream("POST", "/v1/chat", json=payload, timeout=120.0) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        try:
+                            data = json.loads(line[6:])
+                            if "content" in data:
+                                yield data["content"]
+                        except json.JSONDecodeError:
+                            # Skip invalid JSON lines
+                            continue
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise ValueError("Cursor API endpoint not found. Cursor may not have a public API yet.")
+            raise
+        except httpx.TimeoutException:
+            raise TimeoutError("Cursor API request timed out")
+        except Exception as e:
+            raise RuntimeError(f"Cursor API streaming error: {str(e)}")
     
     async def edit_code(
         self,
@@ -154,8 +188,17 @@ class CursorAdapter(ToolAdapter):
         if code_context:
             payload["code_context"] = code_context
         
-        response = await client.post("/v1/edit", json=payload)
-        response.raise_for_status()
-        
-        data = response.json()
-        return data.get("edited_code", "")
+        try:
+            response = await client.post("/v1/edit", json=payload, timeout=120.0)
+            response.raise_for_status()
+            
+            data = response.json()
+            return data.get("edited_code", "")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise ValueError("Cursor edit endpoint not found. Cursor may not have a public API yet.")
+            raise
+        except httpx.TimeoutException:
+            raise TimeoutError("Cursor edit request timed out")
+        except Exception as e:
+            raise RuntimeError(f"Cursor edit error: {str(e)}")

@@ -3,6 +3,7 @@
 from typing import List, Dict, Any, Optional
 from ..context_manager import Context, Message
 from .token_counter import TokenCounter, get_token_counter
+import asyncio
 
 
 class ContextWindowManager:
@@ -103,9 +104,20 @@ class ContextWindowManager:
 class ContextSummarizer:
     """Summarize long conversation histories"""
     
-    def __init__(self, message_threshold: int = 50, summary_ratio: float = 0.8):
+    def __init__(
+        self,
+        message_threshold: int = 50,
+        summary_ratio: float = 0.8,
+        use_llm: bool = True,
+        llm_adapter: Optional[Any] = None,
+        cache_summaries: bool = True,
+    ):
         self.message_threshold = message_threshold
         self.summary_ratio = summary_ratio
+        self.use_llm = use_llm
+        self.llm_adapter = llm_adapter
+        self.cache_summaries = cache_summaries
+        self._summary_cache: Dict[str, str] = {}
     
     def summarize_if_needed(self, context: Context) -> Optional[str]:
         """Summarize context if it exceeds threshold"""
@@ -119,8 +131,40 @@ class ContextSummarizer:
         messages_to_summarize_list = context.messages[:messages_to_summarize]
         context.messages = context.messages[messages_to_summarize:]
         
-        # Generate summary
-        summary = self._generate_summary(messages_to_summarize_list)
+        # Generate summary (async if using LLM)
+        if self.use_llm and self.llm_adapter:
+            # Run async summarization
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If loop is running, create a new event loop in a separate thread
+                    # This avoids conflicts with the existing running loop
+                    import concurrent.futures
+                    
+                    # Create a new event loop in a separate thread
+                    def run_in_thread():
+                        # Create a new event loop for this thread
+                        new_loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(new_loop)
+                        try:
+                            return new_loop.run_until_complete(
+                                self._generate_llm_summary(messages_to_summarize_list)
+                            )
+                        finally:
+                            new_loop.close()
+                    
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(run_in_thread)
+                        summary = future.result(timeout=30)
+                else:
+                    summary = loop.run_until_complete(
+                        self._generate_llm_summary(messages_to_summarize_list)
+                    )
+            except Exception as e:
+                print(f"Async summarization failed: {e}, using extractive")
+                summary = self._generate_extractive_summary(messages_to_summarize_list)
+        else:
+            summary = self._generate_summary(messages_to_summarize_list)
         
         # Create summary message
         summary_message = Message(
@@ -134,8 +178,90 @@ class ContextSummarizer:
         
         return summary
     
+    async def summarize_if_needed_async(self, context: Context) -> Optional[str]:
+        """Async version of summarize_if_needed"""
+        if len(context.messages) <= self.message_threshold:
+            return None
+        
+        messages_to_summarize = int(len(context.messages) * self.summary_ratio)
+        messages_to_keep = len(context.messages) - messages_to_summarize
+        
+        messages_to_summarize_list = context.messages[:messages_to_summarize]
+        context.messages = context.messages[messages_to_summarize:]
+        
+        # Generate summary
+        if self.use_llm and self.llm_adapter:
+            summary = await self._generate_llm_summary(messages_to_summarize_list)
+        else:
+            summary = self._generate_extractive_summary(messages_to_summarize_list)
+        
+        summary_message = Message(
+            role="system",
+            content=f"Previous conversation summary: {summary}",
+            timestamp=messages_to_summarize_list[0].timestamp if messages_to_summarize_list else 0,
+        )
+        
+        context.messages.insert(0, summary_message)
+        return summary
+    
     def _generate_summary(self, messages: List[Message]) -> str:
-        """Generate summary from messages"""
+        """Generate summary from messages (synchronous, extractive only)"""
+        # Check cache first
+        cache_key = self._get_cache_key(messages)
+        if self.cache_summaries and cache_key in self._summary_cache:
+            return self._summary_cache[cache_key]
+        
+        # Note: LLM-based summarization is async and should be called via
+        # summarize_if_needed() which handles async properly, or use
+        # summarize_if_needed_async() for async contexts.
+        # This method only does extractive summarization.
+        
+        # Use extractive summarization
+        summary = self._generate_extractive_summary(messages)
+        if self.cache_summaries:
+            self._summary_cache[cache_key] = summary
+        return summary
+    
+    def _get_cache_key(self, messages: List[Message]) -> str:
+        """Generate cache key from messages"""
+        import hashlib
+        content = "\n".join([f"{m.role}: {m.content[:100]}" for m in messages])
+        return hashlib.md5(content.encode()).hexdigest()
+    
+    async def _generate_llm_summary(self, messages: List[Message]) -> str:
+        """Generate abstractive summary using LLM"""
+        from ..adapters.base import Message as AdapterMessage
+        
+        # Prepare conversation text
+        conversation_text = "\n\n".join([
+            f"{msg.role.upper()}: {msg.content}"
+            for msg in messages
+        ])
+        
+        # Create summarization prompt
+        prompt = f"""Please provide a concise summary of the following conversation. Focus on:
+1. Key decisions made
+2. Important information discussed
+3. Action items or next steps
+4. Technical details that are relevant
+
+Conversation:
+{conversation_text}
+
+Summary:"""
+        
+        # Prepare messages for adapter
+        adapter_messages = [
+            AdapterMessage(role="system", content="You are a helpful assistant that summarizes conversations concisely."),
+            AdapterMessage(role="user", content=prompt),
+        ]
+        
+        # Call LLM adapter
+        response = await self.llm_adapter.chat(adapter_messages, context=None)
+        return response.content.strip()
+    
+    def _generate_extractive_summary(self, messages: List[Message]) -> str:
+        """Generate extractive summary (fallback)"""
         summary_parts = []
         
         for message in messages:
@@ -157,6 +283,10 @@ class ContextSummarizer:
             return f"Summarized {len(messages)} messages"
         
         return "; ".join(summary_parts)
+    
+    def clear_cache(self):
+        """Clear summary cache"""
+        self._summary_cache.clear()
 
 
 class ContextCompressor:
@@ -225,9 +355,13 @@ def manage_context_window(
     return manager.manage_context(context, model)
 
 
-def summarize_context(context: Context) -> Optional[str]:
+def summarize_context(
+    context: Context,
+    use_llm: bool = True,
+    llm_adapter: Optional[Any] = None,
+) -> Optional[str]:
     """Convenience function to summarize context"""
-    summarizer = ContextSummarizer()
+    summarizer = ContextSummarizer(use_llm=use_llm, llm_adapter=llm_adapter)
     return summarizer.summarize_if_needed(context)
 
 

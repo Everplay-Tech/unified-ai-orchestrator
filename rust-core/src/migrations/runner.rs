@@ -144,6 +144,86 @@ impl MigrationRunner {
         Ok(())
     }
     
+    /// Validate migrations for conflicts and issues
+    pub fn validate_migrations(&self) -> Result<(), MigrationError> {
+        // Check for duplicate versions
+        let mut seen_versions = std::collections::HashSet::new();
+        for migration in &self.migrations {
+            if seen_versions.contains(&migration.version) {
+                return Err(MigrationError::InvalidMigration(
+                    format!("Duplicate migration version: {}", migration.version)
+                ));
+            }
+            seen_versions.insert(migration.version);
+        }
+        
+        // Check for gaps in versions
+        if !self.migrations.is_empty() {
+            let mut sorted_versions: Vec<u32> = self.migrations.iter().map(|m| m.version).collect();
+            sorted_versions.sort();
+            
+            for i in 0..sorted_versions.len() - 1 {
+                if sorted_versions[i + 1] != sorted_versions[i] + 1 {
+                    return Err(MigrationError::InvalidMigration(
+                        format!(
+                            "Gap in migration versions: {} -> {}",
+                            sorted_versions[i],
+                            sorted_versions[i + 1]
+                        )
+                    ));
+                }
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Validate database state matches migration history
+    pub async fn validate_migration_state(&self) -> Result<(), MigrationError> {
+        self.ensure_migrations_table().await?;
+        
+        let applied = self.get_applied_migrations().await?;
+        let current_version = self.get_current_version().await?;
+        
+        // Check that applied migrations match registered migrations
+        for (version, name) in &applied {
+            let migration = self.migrations.iter().find(|m| m.version == *version);
+            match migration {
+                Some(m) => {
+                    if m.name != *name {
+                        return Err(MigrationError::InvalidMigration(
+                            format!(
+                                "Migration {} name mismatch: applied '{}' vs registered '{}'",
+                                version, name, m.name
+                            )
+                        ));
+                    }
+                }
+                None => {
+                    return Err(MigrationError::InvalidMigration(
+                        format!("Applied migration {}:{} not found in registered migrations", version, name)
+                    ));
+                }
+            }
+        }
+        
+        // Check for missing migrations
+        if let Some(current) = current_version {
+            for migration in &self.migrations {
+                if migration.version <= current && !applied.contains_key(&migration.version) {
+                    return Err(MigrationError::InvalidMigration(
+                        format!(
+                            "Migration {}:{} should be applied but is missing",
+                            migration.version, migration.name
+                        )
+                    ));
+                }
+            }
+        }
+        
+        Ok(())
+    }
+    
     pub async fn migrate_down(&self, target_version: u32) -> Result<(), MigrationError> {
         self.ensure_migrations_table().await?;
         

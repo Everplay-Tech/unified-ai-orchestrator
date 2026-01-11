@@ -52,3 +52,60 @@ Configuration is stored in `~/.uai/config.toml`:
 - Codebase indexing settings
 
 API keys are stored securely using OS keychain (macOS Keychain, Linux Secret Service).
+
+## System Architecture Diagram
+
+```
+┌─────────────────┐
+│   CLI / API     │
+│   Interface     │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│     Router      │ ◄─── Analyzes requests, selects tools
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Context Manager │ ◄─── Manages conversation history
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Tool Adapters   │ ◄─── Claude, GPT, Perplexity, etc.
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  AI Services    │
+└─────────────────┘
+```
+
+## Component Details
+
+### Indexer
+- AST parsing using tree-sitter
+- Semantic search with embeddings
+- Incremental indexing
+- File watching for real-time updates
+
+### Context Management
+- Token-aware windowing
+- LLM-based summarization
+- Context compression
+- Importance-based retention
+
+### Security
+- JWT authentication
+- API key authentication
+- Role-based authorization
+- Input validation and sanitization
+- Rate limiting
+- Audit logging
+
+### Observability
+- Structured JSON logging
+- Prometheus metrics
+- OpenTelemetry tracing
+- Request/response logging

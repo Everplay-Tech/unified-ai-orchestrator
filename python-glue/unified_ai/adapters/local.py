@@ -48,12 +48,30 @@ class LocalLLMAdapter(ToolAdapter):
         return self._client
     
     async def is_available(self) -> bool:
-        """Check if local LLM server is available"""
+        """Check if local LLM server is available (pure check, no side effects)"""
         try:
             client = await self._get_client()
             # Try to list models (Ollama endpoint)
-            response = await client.get("/api/tags")
-            return response.status_code == 200
+            response = await client.get("/api/tags", timeout=2.0)
+            if response.status_code == 200:
+                return True
+            return False
+        except Exception:
+            return False
+    
+    async def auto_detect_model(self) -> bool:
+        """Auto-detect and set model if current model is not available"""
+        try:
+            client = await self._get_client()
+            response = await client.get("/api/tags", timeout=2.0)
+            if response.status_code == 200:
+                data = response.json()
+                available_models = [m["name"] for m in data.get("models", [])]
+                if available_models and self.model not in available_models:
+                    # Use first available model
+                    self.model = available_models[0]
+                    return True
+            return False
         except Exception:
             return False
     
@@ -133,9 +151,27 @@ class LocalLLMAdapter(ToolAdapter):
         """List available models"""
         try:
             client = await self._get_client()
-            response = await client.get("/api/tags")
+            response = await client.get("/api/tags", timeout=5.0)
             response.raise_for_status()
             data = response.json()
             return [model["name"] for model in data.get("models", [])]
-        except Exception:
+        except Exception as e:
+            # Log error but don't fail
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to list models: {e}")
             return []
+    
+    async def health_check(self) -> bool:
+        """Perform health check on local LLM server"""
+        try:
+            client = await self._get_client()
+            # Try ping endpoint if available, otherwise use tags
+            try:
+                response = await client.get("/api/version", timeout=2.0)
+                return response.status_code == 200
+            except Exception:
+                # Fallback to tags endpoint
+                response = await client.get("/api/tags", timeout=2.0)
+                return response.status_code == 200
+        except Exception:
+            return False
