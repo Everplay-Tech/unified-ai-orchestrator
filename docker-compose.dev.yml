@@ -1,0 +1,28 @@
+version: '3.8'
+
+# Development overrides for docker-compose.yml
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    environment:
+      ENVIRONMENT: development
+      LOG_LEVEL: DEBUG
+      LOG_FORMAT: text
+    volumes:
+      - .:/app
+      - /app/rust-core/target
+    command: ["python", "-m", "unified_ai.api.server", "--reload"]
+
+  postgres:
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_PASSWORD: dev_password
+
+  redis:
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes

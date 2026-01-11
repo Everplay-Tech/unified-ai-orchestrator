@@ -7,11 +7,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
+import os
 
 from .routes import router
 from .auth_routes import router as auth_router
 from .middleware import SecurityHeadersMiddleware, setup_cors, APIKeyMiddleware
 from .csrf import CSRFProtectionMiddleware
+from .logging_middleware import RequestLoggingMiddleware
 from ..config import load_config
 from ..observability import setup_logging, MetricsCollector
 
@@ -59,6 +61,9 @@ def create_app() -> FastAPI:
     # Setup CORS
     setup_cors(app)
     
+    # Add request logging middleware (early in the stack)
+    app.add_middleware(RequestLoggingMiddleware)
+    
     # Add API key authentication middleware
     config = load_config()
     mobile_api_key = None
@@ -104,8 +109,108 @@ def create_app() -> FastAPI:
     
     @app.get("/health")
     async def health_check():
-        """Health check endpoint"""
-        return {"status": "healthy"}
+        """Health check endpoint with detailed status"""
+        from datetime import datetime
+        import time
+        
+        health_status = {
+            "status": "healthy",
+            "timestamp": datetime.utcnow().isoformat(),
+            "version": "1.0.0",
+        }
+        
+        # Check database connectivity
+        try:
+            from ..storage import create_storage_backend, DatabaseType
+            from ..config import load_config
+            from pathlib import Path
+            
+            config = load_config()
+            db_type = DatabaseType(config.storage.db_type.lower())
+            
+            if db_type == DatabaseType.POSTGRESQL:
+                storage = create_storage_backend(db_type, connection_string=config.storage.connection_string)
+            else:
+                storage = create_storage_backend(db_type, db_path=Path(config.storage.db_path))
+            
+            await storage.initialize()
+            db_healthy = await storage.health_check()
+            await storage.close()
+            
+            health_status["database"] = "connected" if db_healthy else "disconnected"
+        except Exception as e:
+            health_status["database"] = f"error: {str(e)}"
+            health_status["status"] = "degraded"
+        
+        # Check Redis connectivity (if configured)
+        try:
+            import redis.asyncio as redis
+            redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+            r = redis.from_url(redis_url, decode_responses=True)
+            await r.ping()
+            await r.close()
+            health_status["redis"] = "connected"
+        except Exception:
+            health_status["redis"] = "not_configured"
+        
+        # Check AI service availability
+        ai_services = {}
+        try:
+            from ..utils.adapters import get_adapters
+            adapters = get_adapters(config)
+            for name, adapter in adapters.items():
+                # Simple check - in production would ping the actual API
+                ai_services[name] = "available" if adapter else "unavailable"
+        except Exception:
+            ai_services = {"error": "check_failed"}
+        
+        health_status["ai_services"] = ai_services
+        
+        # Overall status
+        if health_status["database"] != "connected":
+            health_status["status"] = "unhealthy"
+        
+        return health_status
+    
+    @app.get("/ready")
+    async def readiness_check():
+        """Readiness probe - checks if service is ready to accept traffic"""
+        try:
+            from ..storage import create_storage_backend, DatabaseType
+            from ..config import load_config
+            from pathlib import Path
+            
+            config = load_config()
+            db_type = DatabaseType(config.storage.db_type.lower())
+            
+            if db_type == DatabaseType.POSTGRESQL:
+                storage = create_storage_backend(db_type, connection_string=config.storage.connection_string)
+            else:
+                storage = create_storage_backend(db_type, db_path=Path(config.storage.db_path))
+            
+            await storage.initialize()
+            db_healthy = await storage.health_check()
+            await storage.close()
+            
+            if not db_healthy:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    status_code=503,
+                    content={"status": "not_ready", "reason": "database_unavailable"}
+                )
+            
+            return {"status": "ready"}
+        except Exception as e:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=503,
+                content={"status": "not_ready", "reason": str(e)}
+            )
+    
+    @app.get("/live")
+    async def liveness_check():
+        """Liveness probe - checks if service is alive"""
+        return {"status": "alive"}
     
     @app.get("/metrics")
     async def metrics():

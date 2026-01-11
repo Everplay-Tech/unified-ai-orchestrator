@@ -10,7 +10,7 @@ from ..context_manager import ContextManager
 from ..utils.adapters import get_adapters
 from ..config import load_config
 from ..cost import CostTracker
-from ..observability import trace_request, RequestMetrics
+from ..observability import trace_request, RequestMetrics, MetricsCollector
 from ..resilience import retry, ExponentialBackoffRetry
 from ..security.auth import require_auth
 from ..security.authorization import require_permission, Permission
@@ -121,77 +121,82 @@ async def chat(
     import time
     
     start_time = time.time()
+    metrics_collector = req.app.state.metrics if hasattr(req.app.state, 'metrics') else None
     
     with trace_request("chat", {"message_length": len(request.message)}):
-        # Get adapters
-        config = load_config()
-        adapters = get_adapters(config)
-        
-        if not adapters:
-            raise HTTPException(status_code=500, detail="No AI tools configured")
-        
-        # Route request
-        routing_decision = router.route(
-            message=request.message,
-            conversation_id=request.conversation_id,
-            project_id=request.project_id,
-            explicit_tool=request.tool,
-        )
-        
-        # Select tool
-        selected_tool_name = None
-        if request.tool:
-            selected_tool_name = request.tool
-        else:
-            for tool_name in routing_decision["selected_tools"]:
-                if tool_name in adapters:
-                    selected_tool_name = tool_name
-                    break
-        
-        if not selected_tool_name or selected_tool_name not in adapters:
-            raise HTTPException(
-                status_code=400,
-                detail=f"No suitable tool available. Available: {list(adapters.keys())}"
-            )
-        
-        selected_tool = adapters[selected_tool_name]
-        
-        # Get or create context
-        context = await context_mgr.get_or_create_context(
-            conversation_id=request.conversation_id,
-            project_id=request.project_id,
-        )
-        
-        # Prepare messages
-        messages = []
-        for msg in context.messages[-10:]:
-            messages.append(AdapterMessage(role=msg.role, content=msg.content))
-        
-        messages.append(AdapterMessage(role="user", content=request.message))
-        
-        # Prepare adapter context
-        adapter_context = None
-        if request.project_id or context.codebase_context:
-            adapter_context = AdapterContext(
-                conversation_id=context.conversation_id,
-                project_id=request.project_id or context.project_id,
-                codebase_context=context.codebase_context,
-            )
-        
-        # Make request with retry
-        retry_policy = ExponentialBackoffRetry(max_attempts=3)
-        
-        @retry(policy=retry_policy)
-        async def call_tool():
-            return await selected_tool.chat(messages, adapter_context)
+        api_tracker = None
+        if metrics_collector:
+            api_tracker = metrics_collector.track_api_request("/api/v1/chat", "POST")
+            api_tracker.__enter__()
         
         try:
-            response = await call_tool()
+            # Get adapters
+            config = load_config()
+            adapters = get_adapters(config)
+        
+            if not adapters:
+                raise HTTPException(status_code=500, detail="No AI tools configured")
+            
+            # Route request
+            routing_decision = router.route(
+                message=request.message,
+                conversation_id=request.conversation_id,
+                project_id=request.project_id,
+                explicit_tool=request.tool,
+            )
+            
+            # Select tool
+            selected_tool_name = None
+            if request.tool:
+                selected_tool_name = request.tool
+            else:
+                for tool_name in routing_decision["selected_tools"]:
+                    if tool_name in adapters:
+                        selected_tool_name = tool_name
+                        break
+            
+            if not selected_tool_name or selected_tool_name not in adapters:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"No suitable tool available. Available: {list(adapters.keys())}"
+                )
+            
+            selected_tool = adapters[selected_tool_name]
+            
+            # Get or create context
+            context = await context_mgr.get_or_create_context(
+                conversation_id=request.conversation_id,
+                project_id=request.project_id,
+            )
+            
+            # Prepare messages
+            messages = []
+            for msg in context.messages[-10:]:
+                messages.append(AdapterMessage(role=msg.role, content=msg.content))
+            
+            messages.append(AdapterMessage(role="user", content=request.message))
+            
+            # Prepare adapter context
+            adapter_context = None
+            if request.project_id or context.codebase_context:
+                adapter_context = AdapterContext(
+                    conversation_id=context.conversation_id,
+                    project_id=request.project_id or context.project_id,
+                    codebase_context=context.codebase_context,
+                )
+            
+            # Make request with retry
+            retry_policy = ExponentialBackoffRetry(max_attempts=3)
+            
+            @retry(policy=retry_policy)
+            async def call_tool():
+                return await selected_tool.chat(messages, adapter_context)
             
             # Calculate duration
             duration_ms = (time.time() - start_time) * 1000
+            duration_seconds = duration_ms / 1000.0
             
-            # Record cost
+            # Record cost and metrics
             if response.metadata and "usage" in response.metadata:
                 usage = response.metadata["usage"]
                 input_tokens = usage.get("input_tokens") or usage.get("prompt_tokens", 0)
@@ -199,6 +204,20 @@ async def chat(
                 
                 # Calculate cost (simplified - would use CostCalculator in production)
                 cost_usd = 0.0  # Would calculate based on model pricing
+                
+                # Record AI API call metrics
+                if metrics_collector:
+                    model_name = selected_tool.model if hasattr(selected_tool, "model") else "unknown"
+                    metrics_collector.record_ai_api_call(
+                        tool=selected_tool.name,
+                        model=model_name,
+                        success=True,
+                        duration_seconds=duration_seconds,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        cost_usd=cost_usd,
+                        project_id=request.project_id,
+                    )
                 
                 # Record cost asynchronously
                 import asyncio
@@ -237,6 +256,9 @@ async def chat(
                 )
             )
             
+            if api_tracker:
+                api_tracker.__exit__(None, None, None)
+            
             return ChatResponse(
                 content=response.content,
                 tool=selected_tool.name,
@@ -245,6 +267,21 @@ async def chat(
             )
         except Exception as e:
             duration_ms = (time.time() - start_time) * 1000
+            duration_seconds = duration_ms / 1000.0
+            
+            # Record error metrics
+            if metrics_collector:
+                model_name = selected_tool.model if hasattr(selected_tool, "model") else "unknown"
+                metrics_collector.record_ai_api_call(
+                    tool=selected_tool.name,
+                    model=model_name,
+                    success=False,
+                    duration_seconds=duration_seconds,
+                )
+            
+            if api_tracker:
+                api_tracker.__exit__(type(e), e, None)
+            
             raise HTTPException(status_code=500, detail=str(e))
 
 
